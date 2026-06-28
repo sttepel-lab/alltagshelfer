@@ -164,7 +164,7 @@ const GCAL_CLIENT_ID = "805645282588-8rnj98qkhq3ifgnusrqe3s3n3roncggi.apps.googl
 const GCAL_SCOPE     = "https://www.googleapis.com/auth/calendar";
 const STAR_WEIGHT = { 1:0.05, 2:0.10, 3:0.15, 4:0.20, 5:0.25 };
 const PERSON_ACCENT_POOL = ["#c0392b","#2471a3","#27ae60","#8e44ad","#e67e22","#16a085"];
-function personAccent(name,list){ return PERSON_ACCENT_POOL[list.indexOf(name)%PERSON_ACCENT_POOL.length]; }
+function personAccent(name,list,personColors){ return (personColors&&personColors[name])||PERSON_ACCENT_POOL[list.indexOf(name)%PERSON_ACCENT_POOL.length]; }
 
 const DAY_START=5.0, DAY_END=23.0, PX_PER_HOUR=45;
 const TOTAL_HEIGHT=(DAY_END-DAY_START)*PX_PER_HOUR;
@@ -275,7 +275,7 @@ async function fbSaveAll(changedKey, changedValue){
     const flatKeys = [
       "cfg:persons3","cfg:windows3","cfg:categories1","cfg:appEvents1",
       "cfg:shoppingList1","cfg:todos1","cfg:favorites1","cfg:nutrition1",
-      "cfg:personProfiles1","cfg:recipes1","cfg:apiKey1","cfg:lastWriteTime1"
+      "cfg:personProfiles1","cfg:recipes1","cfg:apiKey1","cfg:lastWriteTime1","cfg:personColors1"
     ];
     for(const k of flatKeys){
       const val = (changedKey===k) ? changedValue : lsGet(k)?.value;
@@ -376,6 +376,7 @@ const SK = {
   favorites:     "cfg:favorites1",
   nutrition:     "cfg:nutrition1",
   personProfiles:"cfg:personProfiles1",
+  personColors:  "cfg:personColors1",
   recipes:       "cfg:recipes1",
   apiKey:        "cfg:apiKey1",
   lastWriteTime: "cfg:lastWriteTime1",
@@ -826,7 +827,27 @@ function PersonManager({persons,onClose,onSave}){
 }
 
 // --- TAG-ANSICHT --------------------------------------------------------------
-function DayView({windows,entryData,adaptedWins,onWindowChange,accent,categories,gcalEvents,gcalLoading,onLoadGcal,dateStr,persons}){
+function PersonColorLegend({persons,personColors,onPersonColorChange}){
+  return(
+    <div style={{display:"flex",alignItems:"center",gap:10,padding:"6px 10px",borderTop:"1px solid #ece9e4",background:"#faf9f7",flexShrink:0,flexWrap:"wrap"}}>
+      {(persons||[]).map(p=>{
+        const col=personColors?.[p]||PERSON_ACCENT_POOL[(persons||[]).indexOf(p)%PERSON_ACCENT_POOL.length];
+        return(
+          <label key={p} style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer"}} title={"Farbe für "+p+" ändern"}>
+            <input type="color" value={col} onChange={e=>onPersonColorChange&&onPersonColorChange(p,e.target.value)}
+              style={{width:0,height:0,opacity:0,position:"absolute",pointerEvents:"none"}}
+              id={"colorpicker-"+p}/>
+            <div onClick={()=>document.getElementById("colorpicker-"+p).click()}
+              style={{width:14,height:14,borderRadius:"50%",background:col,border:"1.5px solid rgba(0,0,0,.15)",cursor:"pointer",flexShrink:0}}/>
+            <span style={{fontSize:9,color:"#666",fontFamily:"Georgia,serif"}}>{p}</span>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+function DayView({windows,entryData,adaptedWins,onWindowChange,accent,categories,gcalEvents,gcalLoading,onLoadGcal,dateStr,persons,personColors,onPersonColorChange}){
   const dayEvents = gcalEvents||[];
 
   return(
@@ -895,16 +916,17 @@ function DayView({windows,entryData,adaptedWins,onWindowChange,accent,categories
               const clampedStart=Math.max(startDec,DAY_START);
               const y=timeToY(clampedStart);
               const height=endDec?Math.max((endDec-clampedStart)*PX_PER_HOUR,24):32;
+              const evColor=personAccent(ev._person||(persons&&persons[0])||"",persons||[],personColors);
               return(
                 <div key={ev.id||i} style={{
                   position:"absolute",top:y,left:1,right:1,height,
-                  background:personAccent(ev._person||(persons&&persons[0])||"",persons||[]),
+                  background:evColor+"33",
                   borderRadius:5,padding:"3px 5px",
                   boxSizing:"border-box",overflow:"hidden",
-                  border:"1.5px solid "+personAccent(ev._person||(persons&&persons[0])||"",persons||[]),
+                  border:"1.5px solid "+evColor,
                 }}>
-                  <div style={{fontSize:10,fontWeight:700,color:"#fff",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ev.summary||"(kein Titel)"}</div>
-                  {endDec&&<div style={{fontSize:8,color:"rgba(255,255,255,.8)"}}>{formatHour(startDec)} - {formatHour(endDec)}</div>}
+                  <div style={{fontSize:10,fontWeight:700,color:"#111",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ev.summary||"(kein Titel)"}</div>
+                  {endDec&&<div style={{fontSize:8,color:"#555"}}>{formatHour(startDec)} - {formatHour(endDec)}</div>}
                 </div>
               );
             })}
@@ -912,11 +934,12 @@ function DayView({windows,entryData,adaptedWins,onWindowChange,accent,categories
         </div>
       </div>
     </div>
+    <PersonColorLegend persons={persons} personColors={personColors} onPersonColorChange={onPersonColorChange}/>
   );
 }
 
 // --- WOCHENANSICHT ------------------------------------------------------------
-function WeekView({today,windows,getEntry,getAdaptedWins,tab,setTab,categories,gcalEvents,gcalLoading,onLoadGcal}){
+function WeekView({today,windows,getEntry,getAdaptedWins,tab,setTab,categories,gcalEvents,gcalLoading,onLoadGcal,persons,personColors,onPersonColorChange}){
   // Zeige heute +/- 3 Tage (7 Tage gesamt, heute in der Mitte)
   const last7=Array.from({length:7},(_,i)=>addDays(today,-3+i));
   return(
@@ -962,9 +985,9 @@ function WeekView({today,windows,getEntry,getAdaptedWins,tab,setTab,categories,g
                     const y=timeToY(Math.max(sd,DAY_START));
                     const h=ed?Math.max((ed-sd)*PX_PER_HOUR,18):24;
                     return(
-                      <div key={ev.id||idx} style={{position:"absolute",top:y,left:1,right:1,height:h,background:"#e74c3c",borderRadius:4,padding:"2px 4px",boxSizing:"border-box",overflow:"hidden",border:"1.5px solid #c0392b"}}>
-                        <div style={{fontSize:8,fontWeight:700,color:"#fff",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ev.summary||"Termin"}</div>
-                        {ed&&<div style={{fontSize:7,color:"rgba(255,255,255,.8)"}}>{formatHour(sd)}-{formatHour(ed)}</div>}
+                      <div key={ev.id||idx} style={{position:"absolute",top:y,left:1,right:1,height:h,background:personAccent(ev._person||(persons&&persons[0])||"",persons||[],personColors)+"33",borderRadius:4,padding:"2px 4px",boxSizing:"border-box",overflow:"hidden",border:"1.5px solid "+personAccent(ev._person||(persons&&persons[0])||"",persons||[],personColors)}}>
+                        <div style={{fontSize:8,fontWeight:700,color:"#111",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ev.summary||"Termin"}</div>
+                        {ed&&<div style={{fontSize:7,color:"#555"}}>{formatHour(sd)}-{formatHour(ed)}</div>}
                       </div>
                     );
                   })}
@@ -995,6 +1018,7 @@ function WeekView({today,windows,getEntry,getAdaptedWins,tab,setTab,categories,g
         </div>
       </div>
     </div>
+    <PersonColorLegend persons={persons} personColors={personColors} onPersonColorChange={onPersonColorChange}/>
   );
 }
 
@@ -4604,6 +4628,7 @@ function App(){
   const [favorites,setFavorites]       = useState([]); // Permanente Preisradar-Favoriten // { "2025-06-09": [...events] }
   const [nutritionData,setNutritionData] = useState({});
   const [personProfiles,setPersonProfiles] = useState({});
+  const [personColors,setPersonColors] = useState({});
   const [recipes,setRecipes] = useState([]);
   const [apiKey,setApiKey]   = useState("");
   const [gcalLoading,setGcalLoading] = useState(false);
@@ -4808,7 +4833,7 @@ function App(){
 
   const windows=windowsMap[activePerson]||DEFAULT_WINDOWS.Stefan;
   const today=todayStr();
-  const accent=personAccent(activePerson,persons);
+  const accent=personAccent(activePerson,persons,personColors);
 
   // --- HELPERS (benötigen Refs/State aus App-Scope) ----------------------------
   // Zeitstempel nach jedem Speichern aktualisieren (ersetzt 12× wiederholten Block)
@@ -4833,6 +4858,8 @@ function App(){
     if(savedNutr?.value){try{setNutritionData(JSON.parse(savedNutr.value));}catch{}}
     const savedProfiles=await sGet(SK.personProfiles);
     if(savedProfiles?.value){try{setPersonProfiles(JSON.parse(savedProfiles.value));}catch{}}
+    const savedColors=await sGet(SK.personColors);
+    if(savedColors?.value){try{setPersonColors(JSON.parse(savedColors.value));}catch{}}
     const savedRecipes=await sGet(SK.recipes);
     if(savedRecipes?.value){try{setRecipes(JSON.parse(savedRecipes.value));}catch{}}
     const savedApiKey=await sGet(SK.apiKey);
@@ -5017,6 +5044,13 @@ function App(){
 
   async function handleSavePersonProfiles(profiles){
     await sSet(SK.personProfiles,JSON.stringify(profiles));
+    await saveTs();
+  }
+
+  async function handlePersonColorChange(person,color){
+    const updated={...personColors,[person]:color};
+    setPersonColors(updated);
+    await sSet(SK.personColors,JSON.stringify(updated));
     await saveTs();
   }
 
@@ -5371,7 +5405,7 @@ function App(){
           <div style={{padding:"3px 10px",fontSize:11,color:"#888",fontWeight:700,flexShrink:0}}>
             {formatDate(activeDate,{weekday:"long",day:"2-digit",month:"long",year:"numeric"})}
           </div>
-          <DayView windows={windows} entryData={getEntry(activeDate)} adaptedWins={getAdaptedWins(activeDate)} onWindowChange={handleWindowChange} accent={accent} categories={categories} gcalEvents={gcalEvents[activeDate]||[]} gcalLoading={gcalLoading} onLoadGcal={()=>loadGcalForDate(activeDate)} dateStr={activeDate} persons={persons}/>
+          <DayView windows={windows} entryData={getEntry(activeDate)} adaptedWins={getAdaptedWins(activeDate)} onWindowChange={handleWindowChange} accent={accent} categories={categories} gcalEvents={gcalEvents[activeDate]||[]} gcalLoading={gcalLoading} onLoadGcal={()=>loadGcalForDate(activeDate)} dateStr={activeDate} persons={persons} personColors={personColors} onPersonColorChange={handlePersonColorChange}/>
         </div>
       )}
       {viewMode==="woche"&&(
@@ -5381,7 +5415,7 @@ function App(){
             const dx=e.changedTouches[0].clientX-swipeTouchStartX.current;
             if(Math.abs(dx)>50){ shiftDate(dx<0?7:-7); }
           }}>
-          <WeekView today={today} windows={windows} getEntry={d=>getEntry(d)} getAdaptedWins={d=>getAdaptedWins(d)} tab={weekTab} setTab={setWeekTab} categories={categories} gcalEvents={gcalEvents} gcalLoading={gcalLoading} onLoadGcal={loadGcalForDate}/>
+          <WeekView today={today} windows={windows} getEntry={d=>getEntry(d)} getAdaptedWins={d=>getAdaptedWins(d)} tab={weekTab} setTab={setWeekTab} categories={categories} gcalEvents={gcalEvents} gcalLoading={gcalLoading} onLoadGcal={loadGcalForDate} persons={persons} personColors={personColors} onPersonColorChange={handlePersonColorChange}/>
         </div>
       )}
       {viewMode==="monat"&&(
