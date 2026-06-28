@@ -852,6 +852,7 @@ function PersonColorLegend({persons,personColors,onPersonColorChange}){
 
 function DayView({windows,entryData,adaptedWins,onWindowChange,accent,categories,gcalEvents,gcalLoading,onLoadGcal,dateStr,persons,personColors,onPersonColorChange}){
   const dayEvents = gcalEvents||[];
+  const [selEv,setSelEv] = useState(null);
 
   return(
   <div>
@@ -922,12 +923,13 @@ function DayView({windows,entryData,adaptedWins,onWindowChange,accent,categories
               const height=endDec?Math.max((endDec-clampedStart)*PX_PER_HOUR,24):32;
               const evColor=personAccent(ev._person||(persons&&persons[0])||"",persons||[],personColors);
               return(
-                <div key={ev.id||i} style={{
+                <div key={ev.id||i} onClick={()=>setSelEv({...ev,date:dateStr,person:ev._person||""})} style={{
                   position:"absolute",top:y,left:1,right:1,height,
                   background:evColor,
                   borderRadius:5,padding:"3px 5px",
                   boxSizing:"border-box",overflow:"hidden",
                   border:"1.5px solid "+evColor,
+                  cursor:"pointer",
                 }}>
                   <div style={{fontSize:10,fontWeight:700,color:"#000",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ev.summary||"(kein Titel)"}</div>
                   {endDec&&<div style={{fontSize:8,color:"#222"}}>{formatHour(startDec)} - {formatHour(endDec)}</div>}
@@ -939,6 +941,7 @@ function DayView({windows,entryData,adaptedWins,onWindowChange,accent,categories
       </div>
     </div>
     <PersonColorLegend persons={persons} personColors={personColors} onPersonColorChange={onPersonColorChange}/>
+    {selEv&&<EventDetailModal ev={selEv} onClose={()=>setSelEv(null)} persons={persons} personColors={personColors}/>}
   </div>
   );
 }
@@ -3841,12 +3844,71 @@ function RecipesView({recipes,onSave,onAddRecipe,accent,apiKey,today,onMarkEaten
 const PERSON_CAL_COLORS = ["#2471a3","#27ae60","#8e44ad","#e67e22","#16a085","#c0392b","#d4ac0d"];
 function personCalColor(name, persons){ return PERSON_CAL_COLORS[persons.indexOf(name)%PERSON_CAL_COLORS.length]; }
 
+// --- TERMIN-DETAIL-POPUP -----------------------------------------------------
+function EventDetailModal({ev, onClose, persons, personColors}){
+  if(!ev) return null;
+  const title   = ev.title||ev.summary||"Termin";
+  const person  = ev.person||ev._person||"";
+  const dateStr = ev.date||(ev.start?.dateTime?ev.start.dateTime.slice(0,10):"");
+  const startT  = ev.startTime||(ev.start?.dateTime?new Date(ev.start.dateTime).toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"}):"");
+  const endT    = ev.endTime  ||(ev.end?.dateTime  ?new Date(ev.end.dateTime  ).toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"}):"");
+  const loc     = ev.location||"";
+  const desc    = ev.description||ev.desc||"";
+  const isGcal  = ev.isGcal||!!ev.start?.dateTime;
+  const accentC = person&&persons?personAccent(person,persons,personColors):"#5b8dee";
+  const dateLabel = dateStr?new Date(dateStr+"T12:00:00").toLocaleDateString("de-DE",{weekday:"long",day:"2-digit",month:"long",year:"numeric"}):"";
+  return(
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 16px"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,width:"100%",maxWidth:380,boxShadow:"0 8px 40px rgba(0,0,0,.28)",overflow:"hidden"}}>
+        <div style={{background:accentC,padding:"14px 16px 12px",position:"relative"}}>
+          <div style={{fontSize:15,fontWeight:700,color:"#fff",lineHeight:1.3,paddingRight:28}}>{title}</div>
+          {person&&<div style={{fontSize:10,color:"rgba(255,255,255,.8)",marginTop:3}}>{person}{isGcal?" · Google Kalender":""}</div>}
+          <button onClick={onClose} style={{position:"absolute",top:10,right:12,background:"rgba(255,255,255,.25)",border:"none",borderRadius:"50%",width:24,height:24,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,color:"#fff",fontWeight:700,lineHeight:1}}>✕</button>
+        </div>
+        <div style={{padding:"14px 16px 18px",display:"flex",flexDirection:"column",gap:8}}>
+          {dateLabel&&(
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:14}}>📅</span>
+              <span style={{fontSize:12,color:"#333"}}>{dateLabel}</span>
+            </div>
+          )}
+          {(startT||endT)&&(
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:14}}>🕐</span>
+              <span style={{fontSize:12,color:"#333"}}>{startT}{endT?" – "+endT:""}</span>
+            </div>
+          )}
+          {loc&&(
+            <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
+              <span style={{fontSize:14,flexShrink:0}}>📍</span>
+              <span style={{fontSize:12,color:"#333",wordBreak:"break-word"}}>{loc}</span>
+            </div>
+          )}
+          {desc&&(
+            <div style={{display:"flex",alignItems:"flex-start",gap:8,marginTop:2}}>
+              <span style={{fontSize:14,flexShrink:0}}>📝</span>
+              <span style={{fontSize:11,color:"#555",lineHeight:1.5,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{desc}</span>
+            </div>
+          )}
+          {!dateLabel&&!startT&&!loc&&!desc&&(
+            <div style={{fontSize:11,color:"#aaa",fontStyle:"italic"}}>Keine weiteren Informationen verfügbar.</div>
+          )}
+        </div>
+        <div style={{padding:"0 16px 14px",display:"flex",justifyContent:"flex-end"}}>
+          <button onClick={onClose} style={{padding:"7px 20px",borderRadius:20,border:"none",background:"#f0f0f0",color:"#333",fontFamily:"Georgia,serif",fontSize:12,cursor:"pointer",fontWeight:700}}>Schließen</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CalendarView({appEvents,gcalEvents,loading,date,onDateChange,today,persons,onAddEvent,onLoadGcal,externalCalView,gcalToken,onGcalConnect,personColors}){
   const [calViewInternal,setCalViewInternal] = useState("woche");
   const calView = externalCalView||calViewInternal;
   const [showAddForm,setShowAddForm] = useState(false);
   const [newEvent,setNewEvent] = useState({title:"",date:today,startTime:"",endTime:"",person:persons[0]||""});
   const [addMsg,setAddMsg] = useState("");
+  const [selEv,setSelEv] = useState(null);
 
   // Expose addForm toggle globally für den App-Header
   useEffect(()=>{ window.__calAddForm=()=>setShowAddForm(v=>!v); return()=>{ delete window.__calAddForm; }; },[]);
@@ -3957,9 +4019,9 @@ function CalendarView({appEvents,gcalEvents,loading,date,onDateChange,today,pers
                       const height=endDec?Math.max((endDec-startDec)*PX_PER_HOUR,22):28;
                       const label=ev.title||ev.summary||"Termin";
                       return(
-                        <div key={ev.id||i} style={{position:"absolute",top:y,left:1,right:1,height,
+                        <div key={ev.id||i} onClick={()=>setSelEv({...ev,date:d})} style={{position:"absolute",top:y,left:1,right:1,height,
                           background:personColor,borderRadius:5,padding:"2px 5px",
-                          boxSizing:"border-box",overflow:"hidden",border:"1.5px solid rgba(0,0,0,.15)",zIndex:2}}>
+                          boxSizing:"border-box",overflow:"hidden",border:"1.5px solid rgba(0,0,0,.15)",zIndex:2,cursor:"pointer"}}>
                           <div style={{fontSize:9,fontWeight:700,color:"#000",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{label}</div>
                           {endDec&&<div style={{fontSize:7,color:"#222"}}>{formatHour(startDec)}-{formatHour(endDec)}</div>}
                         </div>
@@ -4000,7 +4062,7 @@ function CalendarView({appEvents,gcalEvents,loading,date,onDateChange,today,pers
                     const personColor=personAccent(ev.person||persons[0]||"",persons,personColors);
                     const label=ev.title||ev.summary||"Termin";
                     return(
-                      <div key={ev.id||i} style={{background:personColor,borderRadius:3,padding:"1px 4px",marginBottom:1,overflow:"hidden"}}>
+                      <div key={ev.id||i} onClick={e=>{e.stopPropagation();setSelEv({...ev,date:d});}} style={{background:personColor,borderRadius:3,padding:"1px 4px",marginBottom:1,overflow:"hidden",cursor:"pointer"}}>
                         <div style={{fontSize:8,color:"#000",fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{label}</div>
                       </div>
                     );
@@ -4023,6 +4085,7 @@ function CalendarView({appEvents,gcalEvents,loading,date,onDateChange,today,pers
           </div>
         ))}
       </div>
+      {selEv&&<EventDetailModal ev={selEv} onClose={()=>setSelEv(null)} persons={persons} personColors={personColors}/>}
     </div>
   );
 }
