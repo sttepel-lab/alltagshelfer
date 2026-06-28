@@ -851,6 +851,7 @@ function DayView({windows,entryData,adaptedWins,onWindowChange,accent,categories
   const dayEvents = gcalEvents||[];
 
   return(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
     <div style={{flex:1,overflow:"auto"}}>
       <div style={{display:"flex",minHeight:TOTAL_HEIGHT+32}}>
         <TimeAxis/>
@@ -935,6 +936,7 @@ function DayView({windows,entryData,adaptedWins,onWindowChange,accent,categories
       </div>
     </div>
     <PersonColorLegend persons={persons} personColors={personColors} onPersonColorChange={onPersonColorChange}/>
+    </div>
   );
 }
 
@@ -1017,8 +1019,8 @@ function WeekView({today,windows,getEntry,getAdaptedWins,tab,setTab,categories,g
           })}
         </div>
       </div>
+      <PersonColorLegend persons={persons} personColors={personColors} onPersonColorChange={onPersonColorChange}/>
     </div>
-    <PersonColorLegend persons={persons} personColors={personColors} onPersonColorChange={onPersonColorChange}/>
   );
 }
 
