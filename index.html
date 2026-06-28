@@ -628,27 +628,29 @@ function WindowBlock({win,sollStart,sollEnde,istData,compact,onIstChange,accent,
   const height=Math.max(rawH,compact?16:30);
 
   const col=WIN_GRAY;
-  const borderColor=(!compact&&stars&&win.typ==="fest")?STAR_BORDER[stars]:col.darkBorder;
+  const accentBg = accent && accent!==WIN_GRAY.bg ? accent+"33" : col.bg;
+  const accentBgSolid = accent && accent!==WIN_GRAY.bg ? accent+"55" : col.bg+"88";
+  const borderColor=(!compact&&stars&&win.typ==="fest")?STAR_BORDER[stars]:(accent||col.darkBorder);
 
   if(compact){
     return(
-      <div style={{position:"absolute",top:startY,left:1,right:1,height,background:hasIst?col.bg:col.bg+"88",border:`1px ${hasIst?"solid":"dashed"} ${borderColor}`,borderRadius:4,overflow:"hidden",boxSizing:"border-box",padding:"1px 3px"}}>
-        <div style={{fontSize:7,fontWeight:700,color:col.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{win.label}</div>
+      <div style={{position:"absolute",top:startY,left:1,right:1,height,background:hasIst?accentBg:accentBgSolid,border:`1px ${hasIst?"solid":"dashed"} ${accent||borderColor}`,borderRadius:4,overflow:"hidden",boxSizing:"border-box",padding:"1px 3px"}}>
+        <div style={{fontSize:7,fontWeight:700,color:"#000",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{win.label}</div>
         {win.typ==="flexibel"&&aktivitaeten.length>0&&(
           <div style={{display:"flex",flexWrap:"wrap",gap:1,marginTop:1}}>
             {aktivitaeten.slice(0,3).map(a=>{const c=aktColor(a.label,a.kategorie,categories);return(<div key={a.id} style={{fontSize:6,background:c.bg,color:c.text,borderRadius:3,padding:"0 3px",fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",maxWidth:40,textOverflow:"ellipsis"}}>{a.label}</div>);})}
           </div>
         )}
-        {win.typ==="fest"&&hasIst&&<div style={{fontSize:6,color:col.text,opacity:.7}}>{istStart}{istStart&&istEnde?" - ":""}{istEnde}</div>}
+        {win.typ==="fest"&&hasIst&&<div style={{fontSize:6,color:"#333",opacity:.8}}>{istStart}{istStart&&istEnde?" - ":""}{istEnde}</div>}
       </div>
     );
   }
 
   return(
-    <div style={{position:"absolute",top:startY,left:1,right:1,minHeight:height,background:hasIst?col.bg:col.bg+"66",border:`2px ${hasIst?"solid":"dashed"} ${borderColor}`,borderRadius:7,overflow:"visible",boxSizing:"border-box",transition:"border-color .2s",zIndex:expanded?10:1}}>
+    <div style={{position:"absolute",top:startY,left:1,right:1,minHeight:height,background:hasIst?accentBg:col.bg+"66",border:`2px ${hasIst?"solid":"dashed"} ${accent||col.darkBorder}`,borderRadius:7,overflow:"visible",boxSizing:"border-box",transition:"border-color .2s",zIndex:expanded?10:1}}>
       {/* Header */}
       <div onClick={()=>setExpanded(!expanded)} style={{display:"flex",alignItems:"center",gap:4,padding:"4px 7px",cursor:"pointer",userSelect:"none"}}>
-        <span style={{fontSize:10,fontWeight:700,color:col.text,flex:1}}>{win.label}</span>
+        <span style={{fontSize:10,fontWeight:700,color:"#000",flex:1}}>{win.label}</span>
         {win.typ==="fest"&&stars&&<span style={{fontSize:9,color:STAR_BORDER[stars]}}>{Array(stars||0).fill("★").join("")}</span>}
         {win.typ==="flexibel"&&aktivitaeten.length>0&&<span style={{fontSize:9,color:"#888"}}>{aktivitaeten.length}x</span>}
         <span style={{fontSize:8,background:win.typ==="fest"?"#ddd":"#e8f4e8",color:win.typ==="fest"?"#666":"#2d6a2d",borderRadius:10,padding:"1px 5px"}}>{win.typ}</span>
@@ -920,13 +922,13 @@ function DayView({windows,entryData,adaptedWins,onWindowChange,accent,categories
               return(
                 <div key={ev.id||i} style={{
                   position:"absolute",top:y,left:1,right:1,height,
-                  background:evColor+"33",
+                  background:evColor,
                   borderRadius:5,padding:"3px 5px",
                   boxSizing:"border-box",overflow:"hidden",
                   border:"1.5px solid "+evColor,
                 }}>
-                  <div style={{fontSize:10,fontWeight:700,color:"#111",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ev.summary||"(kein Titel)"}</div>
-                  {endDec&&<div style={{fontSize:8,color:"#555"}}>{formatHour(startDec)} - {formatHour(endDec)}</div>}
+                  <div style={{fontSize:10,fontWeight:700,color:"#000",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ev.summary||"(kein Titel)"}</div>
+                  {endDec&&<div style={{fontSize:8,color:"#222"}}>{formatHour(startDec)} - {formatHour(endDec)}</div>}
                 </div>
               );
             })}
@@ -984,9 +986,9 @@ function WeekView({today,windows,getEntry,getAdaptedWins,tab,setTab,categories,g
                     const y=timeToY(Math.max(sd,DAY_START));
                     const h=ed?Math.max((ed-sd)*PX_PER_HOUR,18):24;
                     return(
-                      <div key={ev.id||idx} style={{position:"absolute",top:y,left:1,right:1,height:h,background:personAccent(ev._person||(persons&&persons[0])||"",persons||[],personColors)+"33",borderRadius:4,padding:"2px 4px",boxSizing:"border-box",overflow:"hidden",border:"1.5px solid "+personAccent(ev._person||(persons&&persons[0])||"",persons||[],personColors)}}>
-                        <div style={{fontSize:8,fontWeight:700,color:"#111",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ev.summary||"Termin"}</div>
-                        {ed&&<div style={{fontSize:7,color:"#555"}}>{formatHour(sd)}-{formatHour(ed)}</div>}
+                      <div key={ev.id||idx} style={{position:"absolute",top:y,left:1,right:1,height:h,background:personAccent(ev._person||(persons&&persons[0])||"",persons||[],personColors),borderRadius:4,padding:"2px 4px",boxSizing:"border-box",overflow:"hidden",border:"1.5px solid "+personAccent(ev._person||(persons&&persons[0])||"",persons||[],personColors)}}>
+                        <div style={{fontSize:8,fontWeight:700,color:"#000",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ev.summary||"Termin"}</div>
+                        {ed&&<div style={{fontSize:7,color:"#222"}}>{formatHour(sd)}-{formatHour(ed)}</div>}
                       </div>
                     );
                   })}
