@@ -1936,147 +1936,132 @@ function NewBrandInput({cat, favorites, onSaveFavorites}){
 
 // ─── TODO VIEW ────────────────────────────────────────────────────────────────
 function TodoView({todos,persons,activePerson,accent,onSave,filterPrio,filterPerson}){
-  const [tab,setTab]             = useState("regel"); // "regel" | "sonder" | "erledigt"
-  const [newLabel,setNewLabel]   = useState("");
-  const [newInterval,setNewInterval] = useState("7");
-  const [newAssign,setNewAssign] = useState(activePerson);
-  const [newPrio,setNewPrio]     = useState("hoch");
-  const [newFrist,setNewFrist]   = useState("");
-  const [editId,setEditId]       = useState(null);
-  const [editLabel,setEditLabel] = useState("");
+  const [tab,setTab]               = useState("sonder");
+  const [newLabel,setNewLabel]     = useState("");
+  const [newRecurring,setNewRecurring] = useState(false);
+  const [newInterval,setNewInterval]   = useState("7");
+  const [newAssign,setNewAssign]   = useState(activePerson);
+  const [newPrio,setNewPrio]       = useState("gering");
+  const [newFrist,setNewFrist]     = useState("");
+  const [showIntervalBox,setShowIntervalBox] = useState(false);
+  const [editId,setEditId]         = useState(null);
+  const [editLabel,setEditLabel]   = useState("");
   const [editInterval,setEditInterval] = useState("");
   const [editAssign,setEditAssign] = useState("");
-  const [editPrio,setEditPrio]   = useState("mittel");
-  const [editFrist,setEditFrist] = useState("");
+  const [editPrio,setEditPrio]     = useState("gering");
+  const [editFrist,setEditFrist]   = useState("");
 
-  const PRIO_COLORS={hoch:{bg:"#fdecea",border:"#e57373",text:"#c0392b",dot:"#c0392b"},mittel:{bg:"#fff8e1",border:"#ffd54f",text:"#b8860b",dot:"#e67e22"},gering:{bg:"#f1f8e9",border:"#aed581",text:"#4a7c2d",dot:"#7cb342"}};
-
+  const PRIO_COLORS={hoch:{bg:"#fdecea",border:"#e57373",text:"#c0392b"},mittel:{bg:"#fff8e1",border:"#ffd54f",text:"#b8860b"},gering:{bg:"#f1f8e9",border:"#aed581",text:"#4a7c2d"}};
+  const PRIO_ORDER={hoch:0,mittel:1,gering:2};
   const PERSON_COLORS=["#c0392b","#2471a3","#27ae60","#8e44ad","#e67e22","#16a085"];
   function pColor(n){ return PERSON_COLORS[persons.indexOf(n)%PERSON_COLORS.length]||"#888"; }
 
-  const PRIO_ORDER={hoch:0,mittel:1,gering:2};
-  function fristSort(a,b){
-    // Keine Frist = ganz nach unten
-    const aF=a.frist||"9999-99-99", bF=b.frist||"9999-99-99";
-    if(aF!==bF) return aF.localeCompare(bF); // früher/überfälliger nach oben
-    return (PRIO_ORDER[a.prio||"mittel"]||1)-(PRIO_ORDER[b.prio||"mittel"]||1);
-  }
   function applyFilters(list){
     return list
-      .filter(t=>!filterPrio||filterPrio==="alle"||t.prio===filterPrio||t.typ==="regel")
+      .filter(t=>!filterPrio||filterPrio==="alle"||t.prio===filterPrio)
       .filter(t=>!filterPerson||filterPerson==="alle"||!t.assignedTo||t.assignedTo===filterPerson);
   }
-  const regelItems   = applyFilters((todos||[]).filter(t=>t.typ==="regel")).sort((a,b)=>{
-    const aD=a.dueDate||"9999-99-99", bD=b.dueDate||"9999-99-99";
-    return aD.localeCompare(bD);
+
+  const todoItems = applyFilters((todos||[]).filter(t=>{
+    if(t.typ==="erledigt") return false;
+    if(t.typ==="sonder") return true;
+    if(t.typ==="regel") return t.dueDate && t.dueDate<=todayStr();
+    return false;
+  })).sort((a,b)=>{
+    const aD=a.frist||a.dueDate||"9999-99-99", bD=b.frist||b.dueDate||"9999-99-99";
+    if(aD!==bD) return aD.localeCompare(bD);
+    return (PRIO_ORDER[a.prio||"gering"]||2)-(PRIO_ORDER[b.prio||"gering"]||2);
   });
-  const sonderItems  = applyFilters((todos||[]).filter(t=>t.typ==="sonder")).sort(fristSort);
-  const erledigtItems= applyFilters((todos||[]).filter(t=>t.typ==="erledigt")).sort((a,b)=>(b.doneAt||"").localeCompare(a.doneAt||""));
 
-  function addRegelItem(){
+  const regelItems = applyFilters((todos||[]).filter(t=>
+    t.typ==="regel" && !(t.dueDate && t.dueDate<=todayStr())
+  )).sort((a,b)=>{
+    const aD=a.dueDate||"9999-99-99", bD=b.dueDate||"9999-99-99";
+    if(aD!==bD) return aD.localeCompare(bD);
+    return (PRIO_ORDER[a.prio||"gering"]||2)-(PRIO_ORDER[b.prio||"gering"]||2);
+  });
+
+  const erledigtItems = applyFilters((todos||[]).filter(t=>t.typ==="erledigt"))
+    .sort((a,b)=>(b.doneAt||"").localeCompare(a.doneAt||""));
+
+  function addItem(){
     if(!newLabel.trim()) return;
-    const item={id:uid(),typ:"regel",label:newLabel.trim(),intervalDays:parseInt(newInterval)||7,assignedTo:newAssign,dueDate:todayStr(),createdBy:activePerson};
+    let item;
+    if(newRecurring){
+      item={id:uid(),typ:"regel",label:newLabel.trim(),intervalDays:parseInt(newInterval)||7,
+            prio:newPrio,assignedTo:newAssign,
+            dueDate:addDays(todayStr(),parseInt(newInterval)||7),
+            createdBy:activePerson};
+    } else {
+      item={id:uid(),typ:"sonder",label:newLabel.trim(),assignedTo:newAssign,
+            prio:newPrio,frist:newFrist||null,createdBy:activePerson,createdAt:todayStr()};
+    }
     onSave([...(todos||[]),item]);
-    setNewLabel(""); setNewInterval("7"); setNewAssign(activePerson);
+    setNewLabel(""); setNewAssign(activePerson); setNewPrio("gering");
+    setNewFrist(""); setNewRecurring(false); setNewInterval("7"); setShowIntervalBox(false);
   }
 
-  function addSonderItem(){
-    if(!newLabel.trim()) return;
-    const item={id:uid(),typ:"sonder",label:newLabel.trim(),assignedTo:newAssign,prio:newPrio,frist:newFrist||null,createdBy:activePerson,createdAt:todayStr()};
-    onSave([...(todos||[]),item]);
-    setNewLabel(""); setNewAssign(activePerson); setNewPrio("hoch"); setNewFrist("");
+  function checkItem(t){
+    if(t.typ==="regel"){
+      onSave((todos||[]).map(x=>x.id!==t.id?x:{...x,dueDate:addDays(todayStr(),x.intervalDays),lastDone:todayStr()}));
+    } else {
+      const erledigt={...t,typ:"erledigt",doneAt:todayStr()};
+      onSave((todos||[]).filter(x=>x.id!==t.id).concat(erledigt));
+    }
   }
 
-  function checkRegelItem(id){
-    // Frist immer auf vollen Intervall ab heute zurücksetzen
-    const updated=(todos||[]).map(t=>{
-      if(t.id!==id||t.typ!=="regel") return t;
-      return {...t, dueDate:addDays(todayStr(),t.intervalDays), lastDone:todayStr()};
-    });
-    onSave(updated);
-  }
-
-  function checkSonderItem(id){
-    // Nutze aktuellen todos-Wert direkt (kein stale closure Problem da todos prop)
-    const found=(todos||[]).find(x=>x.id===id);
-    if(!found) return;
-    const erledigt={...found, typ:"erledigt", doneAt:todayStr()};
-    const next=(todos||[]).filter(x=>x.id!==id).concat(erledigt);
-    onSave(next);
-  }
-
-  // Monats-Gruppierung für Erledigt-Tab
-  const [openMonths,setOpenMonths] = useState({});
-  function toggleMonth(key){ setOpenMonths(prev=>({...prev,[key]:!prev[key]})); }
-  const erledigtByMonth = erledigtItems.reduce((acc,t)=>{
-    const key=(t.doneAt||"").slice(0,7); // "YYYY-MM"
-    if(!acc[key]) acc[key]=[];
-    acc[key].push(t);
-    return acc;
-  },{});
-  const monthKeys=Object.keys(erledigtByMonth).sort((a,b)=>b.localeCompare(a));
-  function monthLabel(key){
-    if(!key) return "Unbekannt";
-    const [y,m]=key.split("-");
-    return new Date(parseInt(y),parseInt(m)-1,1).toLocaleDateString("de-DE",{month:"long",year:"numeric"});
-  }
-
-  function deleteItem(id){
-    onSave((todos||[]).filter(t=>t.id!==id));
-  }
+  function deleteItem(id){ onSave((todos||[]).filter(t=>t.id!==id)); }
 
   function startEdit(t){
     setEditId(t.id); setEditLabel(t.label);
     setEditInterval(String(t.intervalDays||7));
     setEditAssign(t.assignedTo||activePerson);
-    setEditPrio(t.prio||"mittel");
+    setEditPrio(t.prio||"gering");
     setEditFrist(t.frist||"");
   }
 
   function saveEdit(t){
-    const updated=(todos||[]).map(x=>{
+    onSave((todos||[]).map(x=>{
       if(x.id!==t.id) return x;
-      if(x.typ==="regel") return {...x,label:editLabel.trim()||x.label,intervalDays:parseInt(editInterval)||x.intervalDays,assignedTo:editAssign};
+      if(x.typ==="regel") return {...x,label:editLabel.trim()||x.label,intervalDays:parseInt(editInterval)||x.intervalDays,assignedTo:editAssign,prio:editPrio};
       return {...x,label:editLabel.trim()||x.label,assignedTo:editAssign,prio:editPrio,frist:editFrist||null};
-    });
-    onSave(updated); setEditId(null);
+    }));
+    setEditId(null);
   }
 
   function dueColor(dueDate){
     const diff=(new Date(dueDate+"T12:00:00")-new Date(todayStr()+"T12:00:00"))/(1000*60*60*24);
-    if(diff<=0) return "#c0392b";
-    if(diff<=2) return "#e67e22";
-    return "#27ae60";
+    if(diff<=0) return "#c0392b"; if(diff<=2) return "#e67e22"; return "#27ae60";
   }
-
   function fristColor(frist){
     const diff=(new Date(frist+"T12:00:00")-new Date(todayStr()+"T12:00:00"))/(1000*60*60*24);
-    if(diff<0) return "#c0392b";
-    if(diff<=3) return "#e67e22";
-    return "#555";
+    if(diff<0) return "#c0392b"; if(diff<=3) return "#e67e22"; return "#555";
   }
 
   const INPUT_STYLE={padding:"5px 8px",border:"1px solid #ddd",borderRadius:5,fontFamily:"Georgia,serif",fontSize:11,background:"#fff"};
   const BTN={padding:"5px 12px",borderRadius:5,border:"none",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:11,fontWeight:700};
 
+  const [openMonths,setOpenMonths]=useState({});
+  function toggleMonth(key){ setOpenMonths(prev=>({...prev,[key]:!prev[key]})); }
+  const erledigtByMonth=erledigtItems.reduce((acc,t)=>{ const k=(t.doneAt||"").slice(0,7); if(!acc[k]) acc[k]=[]; acc[k].push(t); return acc; },{});
+  const monthKeys=Object.keys(erledigtByMonth).sort((a,b)=>b.localeCompare(a));
+  function monthLabel(key){ if(!key) return "Unbekannt"; const [y,m]=key.split("-"); return new Date(parseInt(y),parseInt(m)-1,1).toLocaleDateString("de-DE",{month:"long",year:"numeric"}); }
+
   function ItemRow({t}){
     const isEdit=editId===t.id;
-    const pc=PRIO_COLORS[t.prio||"mittel"];
+    const pc=PRIO_COLORS[t.prio||"gering"];
+    const isRegelDue=t.typ==="regel"&&t.dueDate&&t.dueDate<=todayStr();
 
-    // Hintergrund: bei überfälliger Frist interpoliert von weiß → dunkelrot (1–10 Tage)
     function overdueBg(){
       if(t.typ!=="sonder"||!t.frist) return "#fff";
       const diff=Math.round((new Date(todayStr()+"T12:00:00")-new Date(t.frist+"T12:00:00"))/(1000*60*60*24));
       if(diff<=0) return "#fff";
-      const t2=Math.min(diff,10)/10; // 0..1
-      const r=Math.round(255);
-      const g=Math.round(255*(1-t2*0.85));
-      const b=Math.round(255*(1-t2*0.85));
-      return `rgb(${r},${g},${b})`;
+      const f=Math.min(diff,10)/10;
+      return "rgb(255,"+Math.round(255*(1-f*0.85))+","+Math.round(255*(1-f*0.85))+")";
     }
-    const itemBg=overdueBg();
+
     return(
-      <div style={{background:itemBg,borderRadius:7,marginBottom:6,border:"1px solid #ece9e4",overflow:"hidden",borderLeft:t.typ==="sonder"?"5px solid "+(pc?.border||"#ddd"):""}}>
+      <div style={{background:overdueBg(),borderRadius:7,marginBottom:6,border:"1px solid #ece9e4",overflow:"hidden",borderLeft:"5px solid "+(pc?.border||"#ddd")}}>
         {isEdit?(
           <div style={{padding:"8px 10px",display:"flex",flexDirection:"column",gap:6}}>
             <input value={editLabel} onChange={e=>setEditLabel(e.target.value)} style={{...INPUT_STYLE,width:"100%",boxSizing:"border-box"}} placeholder="Aufgabe"/>
@@ -2088,13 +2073,11 @@ function TodoView({todos,persons,activePerson,accent,onSave,filterPrio,filterPer
                   <span style={{fontSize:10,color:"#888"}}>Tage</span>
                 </div>
               )}
-              {t.typ==="sonder"&&(
-                <select value={editPrio} onChange={e=>setEditPrio(e.target.value)} style={{...INPUT_STYLE}}>
-                  <option value="hoch">🔴 Hoch</option>
-                  <option value="mittel">🟡 Mittel</option>
-                  <option value="gering">🟢 Gering</option>
-                </select>
-              )}
+              <select value={editPrio} onChange={e=>setEditPrio(e.target.value)} style={{...INPUT_STYLE}}>
+                <option value="hoch">🔴 Hoch</option>
+                <option value="mittel">🟡 Mittel</option>
+                <option value="gering">🟢 Gering</option>
+              </select>
               {t.typ==="sonder"&&(
                 <div style={{display:"flex",alignItems:"center",gap:4}}>
                   <span style={{fontSize:10,color:"#888"}}>Frist:</span>
@@ -2112,37 +2095,31 @@ function TodoView({todos,persons,activePerson,accent,onSave,filterPrio,filterPer
         ):(
           <div style={{display:"flex",alignItems:"center",gap:6,padding:"8px 10px"}}>
             {t.typ!=="erledigt"&&(
-              <button onClick={()=>t.typ==="regel"?checkRegelItem(t.id):checkSonderItem(t.id)}
+              <button onClick={()=>checkItem(t)}
                 style={{width:20,height:20,borderRadius:"50%",border:"2px solid "+pColor(t.assignedTo||t.createdBy),background:"#fff",cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",padding:0}}>
                 <span style={{fontSize:10,color:pColor(t.assignedTo||t.createdBy)}}>✓</span>
               </button>
             )}
-            {t.typ==="erledigt"&&(
-              <span style={{width:20,height:20,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:13}}>✅</span>
-            )}
+            {t.typ==="erledigt"&&<span style={{width:20,height:20,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:13}}>✅</span>}
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:12,fontWeight:600,color:t.typ==="erledigt"?"#aaa":"#222",fontFamily:"Georgia,serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textDecoration:t.typ==="erledigt"?"line-through":"none"}}>{t.label}</div>
               <div style={{display:"flex",gap:6,marginTop:2,flexWrap:"wrap",alignItems:"center"}}>
                 {t.assignedTo&&<span style={{fontSize:9,color:pColor(t.assignedTo),fontWeight:700}}>{t.assignedTo}</span>}
-                {t.typ==="sonder"&&t.prio&&(
+                {t.prio&&(
                   <span style={{fontSize:8,fontWeight:700,padding:"1px 5px",borderRadius:8,background:PRIO_COLORS[t.prio]?.bg,color:PRIO_COLORS[t.prio]?.text,border:"1px solid "+PRIO_COLORS[t.prio]?.border}}>
                     {t.prio.toUpperCase()}
                   </span>
                 )}
                 {t.typ==="sonder"&&t.frist&&(()=>{
                   const diff=Math.round((new Date(todayStr()+"T12:00:00")-new Date(t.frist+"T12:00:00"))/(1000*60*60*24));
-                  return(
-                    <span style={{fontSize:9,color:fristColor(t.frist),fontWeight:600}}>
-                      📅 {diff>0?`Überfällig – ${diff}d`:diff===0?"Heute fällig":"bis "+formatDate(t.frist,{day:"2-digit",month:"2-digit"})}
-                    </span>
-                  );
+                  return React.createElement("span",{style:{fontSize:9,color:fristColor(t.frist),fontWeight:600}},"📅 "+(diff>0?"Überfällig – "+diff+"d":diff===0?"Heute fällig":"bis "+formatDate(t.frist,{day:"2-digit",month:"2-digit"})));
                 })()}
                 {t.typ==="regel"&&t.dueDate&&(
-                  <span style={{fontSize:9,color:dueColor(t.dueDate),fontWeight:600}}>
-                    {t.dueDate===todayStr()?"Heute fällig":t.dueDate<todayStr()?"Überfällig":"Fällig "+formatDate(t.dueDate,{day:"2-digit",month:"2-digit"})}
-                  </span>
+                  isRegelDue
+                    ? <span style={{fontSize:9,color:"#c0392b",fontWeight:700,background:"#fdecea",borderRadius:4,padding:"1px 5px"}}>⚠ Fällig</span>
+                    : <span style={{fontSize:9,color:dueColor(t.dueDate),fontWeight:600}}>Fällig {formatDate(t.dueDate,{day:"2-digit",month:"2-digit"})}</span>
                 )}
-                {t.typ==="regel"&&<span style={{fontSize:9,color:"#aaa"}}>alle {t.intervalDays}d</span>}
+                {t.typ==="regel"&&<span style={{fontSize:9,color:"#aaa"}}>↺ alle {t.intervalDays}d</span>}
                 {t.typ==="erledigt"&&t.doneAt&&<span style={{fontSize:9,color:"#aaa"}}>erledigt {formatDate(t.doneAt,{day:"2-digit",month:"2-digit"})}</span>}
               </div>
             </div>
@@ -2156,55 +2133,61 @@ function TodoView({todos,persons,activePerson,accent,onSave,filterPrio,filterPer
     );
   }
 
-  const curItems = tab==="regel" ? regelItems : tab==="sonder" ? sonderItems : erledigtItems;
-  const emptyMsg = tab==="regel"?"Keine wiederkehrenden Aufgaben":tab==="sonder"?"Keine Sonderaufgaben":"Noch nichts erledigt";
+  const curItems = tab==="sonder"?todoItems:tab==="regel"?regelItems:erledigtItems;
+  const emptyMsg = tab==="sonder"?"Keine offenen Aufgaben":tab==="regel"?"Keine wiederkehrenden Aufgaben":"Noch nichts erledigt";
 
   return(
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:"transparent"}}>
-      {/* Tabs */}
       <div style={{display:"flex",background:"#fff",borderBottom:"2px solid #ece9e4",flexShrink:0}}>
-        {[["regel","Wiederkehrend"],["sonder","Sonderaufgaben"],["erledigt","Erledigt"]].map(([v,l])=>(
-          <button key={v} onClick={()=>setTab(v)} style={{padding:"8px 14px",border:"none",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:11,fontWeight:tab===v?700:400,background:tab===v?"#fff":"transparent",color:tab===v?"#111":"#aaa",borderBottom:tab===v?"2px solid #111":"none",marginBottom:-2}}>{l}{v==="erledigt"&&erledigtItems.length>0?` (${erledigtItems.length})`:""}</button>
+        {[["sonder","ToDo's"],["regel","Wiederkehrend"],["erledigt","Erledigt"]].map(([v,l])=>(
+          <button key={v} onClick={()=>setTab(v)} style={{padding:"8px 14px",border:"none",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:11,fontWeight:tab===v?700:400,background:tab===v?"#fff":"transparent",color:tab===v?"#111":"#aaa",borderBottom:tab===v?"2px solid #111":"none",marginBottom:-2}}>
+            {l}{v==="erledigt"&&erledigtItems.length>0?" ("+erledigtItems.length+")":""}
+            {v==="sonder"&&todoItems.length>0?" ("+todoItems.length+")":""}
+          </button>
         ))}
       </div>
 
-      {/* Neue Aufgabe (nur bei regel + sonder) */}
-      {tab!=="erledigt"&&(
+      {tab==="sonder"&&(
         <div style={{background:"#fff",borderBottom:"1px solid #ece9e4",padding:"8px 12px",flexShrink:0}}>
           <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
             <input value={newLabel} onChange={e=>setNewLabel(e.target.value)}
-              onKeyDown={e=>e.key==="Enter"&&(tab==="regel"?addRegelItem():addSonderItem())}
-              placeholder={tab==="regel"?"Neue wiederkehrende Aufgabe…":"Neue Sonderaufgabe…"}
+              onKeyDown={e=>e.key==="Enter"&&addItem()}
+              placeholder="Neue Aufgabe…"
               style={{...INPUT_STYLE,flex:1,minWidth:120}}/>
-            {tab==="regel"&&(
-              <div style={{display:"flex",alignItems:"center",gap:4}}>
-                <span style={{fontSize:10,color:"#888"}}>Alle</span>
-                <input type="number" value={newInterval} onChange={e=>setNewInterval(e.target.value)} min="1"
-                  style={{...INPUT_STYLE,width:48}}/>
-                <span style={{fontSize:10,color:"#888"}}>Tage</span>
-              </div>
-            )}
-            {tab==="sonder"&&(
-              <select value={newPrio} onChange={e=>setNewPrio(e.target.value)} style={{...INPUT_STYLE}}>
-                <option value="hoch">🔴 Hoch</option>
-                <option value="mittel">🟡 Mittel</option>
-                <option value="gering">🟢 Gering</option>
-              </select>
-            )}
-            {tab==="sonder"&&(
+            <select value={newPrio} onChange={e=>setNewPrio(e.target.value)} style={{...INPUT_STYLE}}>
+              <option value="hoch">🔴 Hoch</option>
+              <option value="mittel">🟡 Mittel</option>
+              <option value="gering">🟢 Gering</option>
+            </select>
+            {!newRecurring&&(
               <input type="date" value={newFrist} onChange={e=>setNewFrist(e.target.value)}
                 title="Frist (optional)" style={{...INPUT_STYLE,fontSize:10}}/>
             )}
             <select value={newAssign} onChange={e=>setNewAssign(e.target.value)} style={{...INPUT_STYLE}}>
               {persons.map(p=><option key={p} value={p}>{p}</option>)}
             </select>
-            <button onClick={tab==="regel"?addRegelItem:addSonderItem}
-              style={{...BTN,background:accent,color:"#fff"}}>+ Hinzufügen</button>
+          </div>
+          <div style={{display:"flex",gap:8,marginTop:6,alignItems:"center",flexWrap:"wrap"}}>
+            <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",fontSize:11,color:"#555"}}>
+              <div onClick={()=>{setNewRecurring(v=>!v);setShowIntervalBox(v=>!v);}}
+                style={{width:18,height:18,borderRadius:4,border:"2px solid "+(newRecurring?accent:"#ccc"),background:newRecurring?accent:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",transition:"all 0.15s",flexShrink:0}}>
+                {newRecurring&&<span style={{color:"#fff",fontSize:11,lineHeight:1}}>✓</span>}
+              </div>
+              ↺ Wiederkehrend
+            </label>
+            {showIntervalBox&&(
+              <div style={{display:"flex",alignItems:"center",gap:4,background:"#f5f3ef",borderRadius:6,padding:"3px 8px",border:"1px solid #ece9e4"}}>
+                <span style={{fontSize:10,color:"#888"}}>Alle</span>
+                <input type="number" value={newInterval} onChange={e=>setNewInterval(e.target.value)} min="1"
+                  style={{...INPUT_STYLE,width:48,padding:"3px 6px"}}/>
+                <span style={{fontSize:10,color:"#888"}}>Tage</span>
+              </div>
+            )}
+            <button onClick={addItem} style={{...BTN,background:accent,color:"#fff",marginLeft:"auto"}}>+ Hinzufügen</button>
           </div>
         </div>
       )}
 
-      {/* Liste */}
       <div style={{flex:1,overflowY:"auto",padding:"10px 12px"}}>
         {tab!=="erledigt"&&(
           curItems.length===0
@@ -2216,7 +2199,7 @@ function TodoView({todos,persons,activePerson,accent,onSave,filterPrio,filterPer
             ? <div style={{textAlign:"center",color:"#bbb",fontSize:11,marginTop:30,fontFamily:"Georgia,serif"}}>Noch nichts erledigt</div>
             : <React.Fragment>
                 {monthKeys.map(key=>{
-                  const isOpen=openMonths[key]!==false; // default offen
+                  const isOpen=openMonths[key]!==false;
                   return(
                     <div key={key} style={{marginBottom:8}}>
                       <button onClick={()=>toggleMonth(key)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"6px 10px",background:"#ece9e4",border:"none",borderRadius:6,cursor:"pointer",fontFamily:"Georgia,serif",fontSize:11,fontWeight:700,color:"#555"}}>
@@ -4146,7 +4129,18 @@ function DashboardView(props) {
   var showItems = openItems.slice(0,5);
 
   // --- Todos (aktive Person, offen) ---
-  var openTodos = todos.filter(function(t){ return t.typ!=="erledigt" && (!t.assignedTo||t.assignedTo===activePerson); });
+  var openTodos = todos.filter(function(t){
+    if(t.typ==="erledigt") return false;
+    if(t.assignedTo && t.assignedTo!==activePerson) return false;
+    if(t.typ==="sonder") return true;
+    if(t.typ==="regel") return t.dueDate && t.dueDate<=activeDate;
+    return false;
+  }).sort(function(a,b){
+    var aD=a.frist||a.dueDate||"9999-99-99", bD=b.frist||b.dueDate||"9999-99-99";
+    if(aD!==bD) return aD.localeCompare(bD);
+    var PO={hoch:0,mittel:1,gering:2};
+    return (PO[a.prio||"gering"]||2)-(PO[b.prio||"gering"]||2);
+  });
   var showTodos = openTodos.slice(0,4);
 
   // --- Routine (Aktivitäten heute) ---
