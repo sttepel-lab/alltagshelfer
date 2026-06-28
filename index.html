@@ -275,7 +275,7 @@ async function fbSaveAll(changedKey, changedValue){
     const flatKeys = [
       "cfg:persons3","cfg:windows3","cfg:categories1","cfg:appEvents1",
       "cfg:shoppingList1","cfg:todos1","cfg:favorites1","cfg:nutrition1",
-      "cfg:personProfiles1","cfg:recipes1","cfg:apiKey1","cfg:lastWriteTime1","cfg:personColors1"
+      "cfg:personProfiles1","cfg:recipes1","cfg:apiKey1","cfg:lastWriteTime1","cfg:personColors1","cfg:wishlist1"
     ];
     for(const k of flatKeys){
       const val = (changedKey===k) ? changedValue : lsGet(k)?.value;
@@ -377,6 +377,7 @@ const SK = {
   nutrition:     "cfg:nutrition1",
   personProfiles:"cfg:personProfiles1",
   personColors:  "cfg:personColors1",
+  wishlist:      "cfg:wishlist1",
   recipes:       "cfg:recipes1",
   apiKey:        "cfg:apiKey1",
   lastWriteTime: "cfg:lastWriteTime1",
@@ -2231,7 +2232,7 @@ function TodoView({todos,persons,activePerson,accent,onSave,filterPrio,filterPer
   );
 }
 
-function ShoppingView({items,persons,activePerson,accent,onAdd,onToggle,onDelete,onUpdate,favorites,onSaveFavorites,externalShopTab}){
+function ShoppingView({items,persons,activePerson,accent,onAdd,onToggle,onDelete,onUpdate,favorites,onSaveFavorites,externalShopTab,wishlist,onSaveWishlist}){
   const [shopTabInternal,setShopTabInternal] = useState("liste");
   const shopTab = externalShopTab||shopTabInternal;
   const [newText,setNewText]     = useState("");
@@ -2249,6 +2250,17 @@ function ShoppingView({items,persons,activePerson,accent,onAdd,onToggle,onDelete
   const [newInterval,setNewInterval]   = useState(7);
   const [recurrEdit,setRecurrEdit]     = useState(null);
   const [recurrDays,setRecurrDays]     = useState(7);
+  const [wishText,setWishText]         = useState("");
+  const [wishNote,setWishNote]         = useState("");
+  const localWishlist = wishlist||[];
+  function addWish(){
+    const t=wishText.trim(); if(!t) return;
+    onSaveWishlist&&onSaveWishlist([...localWishlist,{id:Date.now().toString(),text:t,note:wishNote.trim(),done:false,addedAt:new Date().toISOString().slice(0,10)}]);
+    setWishText(""); setWishNote("");
+  }
+  function toggleWish(id){ onSaveWishlist&&onSaveWishlist(localWishlist.map(w=>w.id===id?{...w,done:!w.done}:w)); }
+  function deleteWish(id){ onSaveWishlist&&onSaveWishlist(localWishlist.filter(w=>w.id!==id)); }
+  function moveWishToCart(w){ onAdd&&onAdd(w.text,""); deleteWish(w.id); }
 
   function daysUntil(dateStr){
     if(!dateStr) return 0;
@@ -2578,6 +2590,44 @@ function ShoppingView({items,persons,activePerson,accent,onAdd,onToggle,onDelete
           </div>
           <div style={{padding:"4px 12px",borderTop:"1px solid #ece9e4",flexShrink:0,background:"#faf9f7"}}>
             <span style={{fontSize:8,color:"#aaa"}}>Preise via KI + Web Search - Marktdaten koennen variieren</span>
+          </div>
+        </>
+      )}
+
+      {/* WUNSCHLISTE */}
+      {shopTab==="wunsch"&&(
+        <>
+          <div style={{padding:"8px 12px",background:"#fff",borderBottom:"1px solid #ece9e4",flexShrink:0}}>
+            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:7}}>
+              <span style={{fontSize:12,fontWeight:700,color:"#111",flex:1}}>🌟 Wunschliste</span>
+              <span style={{fontSize:10,color:"#888"}}>{localWishlist.filter(w=>!w.done).length} offen</span>
+            </div>
+            <div style={{display:"flex",gap:5,marginBottom:5}}>
+              <input value={wishText} onChange={e=>setWishText(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addWish()} placeholder="Wunsch hinzufügen..."
+                style={{flex:1,border:"1px solid #ddd",borderRadius:7,padding:"6px 9px",fontFamily:"Georgia,serif",fontSize:12,outline:"none"}}/>
+              <button onClick={addWish} style={{padding:"6px 14px",borderRadius:20,border:"none",background:"#8e44ad",color:"#fff",cursor:"pointer",fontSize:12,fontWeight:700}}>+</button>
+            </div>
+            <input value={wishNote} onChange={e=>setWishNote(e.target.value)} placeholder="Notiz (optional)..."
+              style={{width:"100%",border:"1px solid #eee",borderRadius:7,padding:"5px 9px",fontFamily:"Georgia,serif",fontSize:11,outline:"none",boxSizing:"border-box"}}/>
+          </div>
+          <div style={{flex:1,overflow:"auto",padding:"8px 12px"}}>
+            {localWishlist.length===0&&(
+              <div style={{textAlign:"center",color:"#ccc",fontSize:12,marginTop:40}}>Noch keine Wünsche ✨</div>
+            )}
+            {localWishlist.map(w=>(
+              <div key={w.id} style={{display:"flex",alignItems:"flex-start",gap:8,marginBottom:10,background:w.done?"#f5f3ef":"#fff",borderRadius:9,padding:"8px 10px",border:"1px solid "+(w.done?"#e0ddd8":"#ece9e4"),opacity:w.done?.6:1}}>
+                <input type="checkbox" checked={w.done} onChange={()=>toggleWish(w.id)} style={{accentColor:"#8e44ad",width:15,height:15,marginTop:2,cursor:"pointer",flexShrink:0}}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:12,color:w.done?"#aaa":"#111",fontWeight:600,textDecoration:w.done?"line-through":"none"}}>{w.text}</div>
+                  {w.note&&<div style={{fontSize:10,color:"#888",marginTop:2}}>{w.note}</div>}
+                  {w.addedAt&&<div style={{fontSize:9,color:"#bbb",marginTop:2}}>{w.addedAt}</div>}
+                </div>
+                <button onClick={()=>moveWishToCart(w)} title="In Einkaufsliste verschieben"
+                  style={{background:"none",border:"none",cursor:"pointer",color:"#27ae60",fontSize:14,padding:2,flexShrink:0}}>🛒</button>
+                <button onClick={()=>deleteWish(w.id)}
+                  style={{background:"none",border:"none",cursor:"pointer",color:"#ddd",fontSize:13,padding:2,flexShrink:0}}>✕</button>
+              </div>
+            ))}
           </div>
         </>
       )}
@@ -4079,7 +4129,7 @@ function DashboardView(props) {
   var showEvents = upcomingEvents.slice(0,3);
 
   // --- Einkaufsliste ---
-  var openItems = shoppingList.filter(function(i){ return !i.done; });
+  var openItems = shoppingList.filter(function(i){ return !i.done && !i.recurring; });
   var showItems = openItems.slice(0,5);
 
   // --- Todos (aktive Person, offen) ---
@@ -4638,6 +4688,7 @@ function App(){
   const [nutritionData,setNutritionData] = useState({});
   const [personProfiles,setPersonProfiles] = useState({});
   const [personColors,setPersonColors] = useState({});
+  const [wishlist,setWishlist] = useState([]);
   const [recipes,setRecipes] = useState([]);
   const [apiKey,setApiKey]   = useState("");
   const [gcalLoading,setGcalLoading] = useState(false);
@@ -4869,6 +4920,8 @@ function App(){
     if(savedProfiles?.value){try{setPersonProfiles(JSON.parse(savedProfiles.value));}catch{}}
     const savedColors=await sGet(SK.personColors);
     if(savedColors?.value){try{setPersonColors(JSON.parse(savedColors.value));}catch{}}
+    const savedWishlist=await sGet(SK.wishlist);
+    if(savedWishlist?.value){try{setWishlist(JSON.parse(savedWishlist.value));}catch{}}
     const savedRecipes=await sGet(SK.recipes);
     if(savedRecipes?.value){try{setRecipes(JSON.parse(savedRecipes.value));}catch{}}
     const savedApiKey=await sGet(SK.apiKey);
@@ -5060,6 +5113,12 @@ function App(){
     const updated={...personColors,[person]:color};
     setPersonColors(updated);
     await sSet(SK.personColors,JSON.stringify(updated));
+    await saveTs();
+  }
+
+  async function handleSaveWishlist(list){
+    setWishlist(list);
+    await sSet(SK.wishlist,JSON.stringify(list));
     await saveTs();
   }
 
@@ -5322,11 +5381,21 @@ function App(){
             </div>
             <div style={{flex:1}}/>
             <button onClick={()=>{ window.__calAddForm&&window.__calAddForm(); }} style={{padding:"3px 10px",borderRadius:20,border:"none",background:"#27ae60",color:"#fff",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",fontWeight:700,flexShrink:0}}>+ Termin</button>
-            {gcalToken?(
-              <button onClick={()=>{ const weekDays=Array.from({length:7},(_,i)=>{ const d=new Date(gcalDate+"T12:00:00"); d.setDate(d.getDate()-3+i); return d.toISOString().slice(0,10); }); gcalRefreshAll(true); }} style={{padding:"3px 9px",borderRadius:20,border:"1px solid #4285f4",background:"transparent",color:"#4285f4",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",flexShrink:0}}>
-                {gcalLoading?"...":"⟳ GCal"}
-              </button>
-            ):(
+            {persons.map(p=>{
+              const tok=gcalTokens[p]||gcalGetToken(p);
+              const col=personAccent(p,persons,personColors);
+              if(!tok) return null;
+              return(
+                <button key={p} onClick={async()=>{
+                  setActivePerson(p);
+                  setTimeout(()=>gcalRefreshAll(true),50);
+                }}
+                style={{padding:"3px 9px",borderRadius:20,border:"1.5px solid "+col,background:"transparent",color:col,cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",flexShrink:0}}>
+                  {gcalLoading?"...":"⟳ "+p}
+                </button>
+              );
+            })}
+            {!persons.some(p=>gcalTokens[p]||gcalGetToken(p))&&(
               <button onClick={gcalConnect} style={{padding:"3px 9px",borderRadius:20,border:"1px solid #4285f4",background:"#4285f4",color:"#fff",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",flexShrink:0}}>
                 🔗 Google
               </button>
@@ -5363,6 +5432,7 @@ function App(){
             <div style={{flex:1}}/>
             <button onClick={()=>setShopTab("liste")} style={{padding:"3px 10px",borderRadius:20,border:"none",background:shopTab==="liste"?"#111":"#f0ede8",color:shopTab==="liste"?"#fff":"#555",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",fontWeight:shopTab==="liste"?700:400,flexShrink:0}}>+ Einkauf</button>
             <button onClick={()=>setShopTab("wiederkehrend")} style={{padding:"3px 10px",borderRadius:20,border:"none",background:shopTab==="wiederkehrend"?"#e67e22":"#f0ede8",color:shopTab==="wiederkehrend"?"#fff":"#555",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",fontWeight:shopTab==="wiederkehrend"?700:400,flexShrink:0}}>&#8635; Wiederkehrend</button>
+            <button onClick={()=>setShopTab("wunsch")} style={{padding:"3px 10px",borderRadius:20,border:"none",background:shopTab==="wunsch"?"#8e44ad":"#f0ede8",color:shopTab==="wunsch"?"#fff":"#555",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",fontWeight:shopTab==="wunsch"?700:400,flexShrink:0}}>🌟 Wunsch</button>
             <button onClick={()=>setShopTab("preisradar")} style={{padding:"3px 10px",borderRadius:20,border:"1px solid #e0ddd8",background:shopTab==="preisradar"?"#111":"transparent",color:shopTab==="preisradar"?"#fff":"#555",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",fontWeight:shopTab==="preisradar"?700:400,flexShrink:0}}>Preisradar</button>
           </div>
         );
@@ -5476,6 +5546,8 @@ function App(){
             await saveTs();
           }}
           externalShopTab={shopTab}
+          wishlist={wishlist}
+          onSaveWishlist={handleSaveWishlist}
         />
       )}
       {viewMode==="ernaehrung"&&(
