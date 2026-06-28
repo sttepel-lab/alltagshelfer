@@ -851,7 +851,6 @@ function DayView({windows,entryData,adaptedWins,onWindowChange,accent,categories
   const dayEvents = gcalEvents||[];
 
   return(
-    <React.Fragment>
     <div style={{flex:1,overflow:"auto"}}>
       <div style={{display:"flex",minHeight:TOTAL_HEIGHT+32}}>
         <TimeAxis/>
@@ -935,8 +934,6 @@ function DayView({windows,entryData,adaptedWins,onWindowChange,accent,categories
         </div>
       </div>
     </div>
-    <PersonColorLegend persons={persons} personColors={personColors} onPersonColorChange={onPersonColorChange}/>
-    </React.Fragment>
   );
 }
 
@@ -1019,7 +1016,6 @@ function WeekView({today,windows,getEntry,getAdaptedWins,tab,setTab,categories,g
           })}
         </div>
       </div>
-      <PersonColorLegend persons={persons} personColors={personColors} onPersonColorChange={onPersonColorChange}/>
     </div>
   );
 }
@@ -1514,7 +1510,7 @@ REGELN:
 }
 
 // --- EINSTELLUNGEN MODAL ------------------------------------------------------
-function SettingsModal({persons,windowsMap,activePerson,onClose,onSavePersons,onSaveWindows,personProfiles,onSavePersonProfiles,apiKey,onSaveApiKey,gcalToken,onGcalConnect,onGcalDisconnect}){
+function SettingsModal({persons,windowsMap,activePerson,onClose,onSavePersons,onSaveWindows,personProfiles,onSavePersonProfiles,apiKey,onSaveApiKey,gcalToken,onGcalConnect,onGcalDisconnect,personColors,onPersonColorChange}){
   const [tab,setTab]=useState("persons");
   return(
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -1529,7 +1525,7 @@ function SettingsModal({persons,windowsMap,activePerson,onClose,onSavePersons,on
           ))}
         </div>
         <div style={{overflow:"auto",flex:1,padding:"16px 20px"}}>
-          {tab==="persons"&&<PersonsTab persons={persons} onSave={onSavePersons}/>}
+          {tab==="persons"&&<PersonsTab persons={persons} onSave={onSavePersons} personColors={personColors} onPersonColorChange={onPersonColorChange}/>}
           {tab==="profil"&&<PersonProfileTab persons={persons} personProfiles={personProfiles||{}} onSave={onSavePersonProfiles}/>}
           {tab==="windows"&&<WindowsTab person={activePerson} windows={windowsMap[activePerson]||[]} onSave={w=>onSaveWindows(activePerson,w)}/>}
           {tab==="api"&&<ApiKeyTab apiKey={apiKey} onSave={onSaveApiKey}/>}
@@ -1540,7 +1536,7 @@ function SettingsModal({persons,windowsMap,activePerson,onClose,onSavePersons,on
   );
 }
 
-function PersonsTab({persons,onSave}){
+function PersonsTab({persons,onSave,personColors,onPersonColorChange}){
   const [local,setLocal]=useState([...persons]);
   const [editing,setEditing]=useState(null);
   const [editName,setEditName]=useState("");
@@ -1552,8 +1548,16 @@ function PersonsTab({persons,onSave}){
   function remove(i){if(local.length<=1){setMsg("Mind. eine Person.");return;}const u=[...local];u.splice(i,1);setLocal(u);}
   return(
     <div>
-      {local.map((p,i)=>(
+      {local.map((p,i)=>{
+        const col=(personColors&&personColors[p])||PERSON_ACCENT_POOL[i%PERSON_ACCENT_POOL.length];
+        return(
         <div key={i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,background:"#f9f7f3",borderRadius:8,padding:"7px 10px"}}>
+          <label style={{cursor:"pointer",flexShrink:0}} title="Farbe ändern">
+            <input type="color" value={col} onChange={e=>onPersonColorChange&&onPersonColorChange(p,e.target.value)}
+              style={{width:0,height:0,opacity:0,position:"absolute",pointerEvents:"none"}} id={"cp-"+p}/>
+            <div onClick={()=>document.getElementById("cp-"+p).click()}
+              style={{width:18,height:18,borderRadius:"50%",background:col,border:"2px solid rgba(0,0,0,.15)",cursor:"pointer"}}/>
+          </label>
           {editing===i?(
             <>
               <input value={editName} onChange={e=>setEditName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&confirmEdit()} autoFocus
@@ -1569,7 +1573,8 @@ function PersonsTab({persons,onSave}){
             </>
           )}
         </div>
-      ))}
+        );
+      })}
       <div style={{display:"flex",gap:8,marginTop:8}}>
         <input value={newName} onChange={e=>setNewName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="Neuer Name..."
           style={{flex:1,border:"1px solid #ddd",borderRadius:8,padding:"7px 10px",fontFamily:"Georgia,serif",fontSize:13,outline:"none"}}/>
@@ -5149,7 +5154,8 @@ function App(){
           onClose={()=>setShowSettings(false)} onSavePersons={handleSavePersons} onSaveWindows={handleSaveWindows}
           personProfiles={personProfiles} onSavePersonProfiles={handleSavePersonProfiles}
           apiKey={apiKey} onSaveApiKey={handleSaveApiKey}
-          gcalToken={gcalToken} onGcalConnect={gcalConnect} onGcalDisconnect={gcalDisconnect}/>
+          gcalToken={gcalToken} onGcalConnect={gcalConnect} onGcalDisconnect={gcalDisconnect}
+          personColors={personColors} onPersonColorChange={handlePersonColorChange}/>
       )}
 
       {/* HANS KATZE – globaler Overlay, immer gemountet für WakeMode */}
