@@ -854,6 +854,7 @@ function DayView({windows,entryData,adaptedWins,onWindowChange,accent,categories
   const dayEvents = gcalEvents||[];
 
   return(
+  <div>
     <div style={{flex:1,overflow:"auto"}}>
       <div style={{display:"flex",minHeight:TOTAL_HEIGHT+32}}>
         <TimeAxis/>
@@ -937,6 +938,8 @@ function DayView({windows,entryData,adaptedWins,onWindowChange,accent,categories
         </div>
       </div>
     </div>
+    <PersonColorLegend persons={persons} personColors={personColors} onPersonColorChange={onPersonColorChange}/>
+  </div>
   );
 }
 
@@ -945,6 +948,7 @@ function WeekView({today,windows,getEntry,getAdaptedWins,tab,setTab,categories,g
   // Zeige heute +/- 3 Tage (7 Tage gesamt, heute in der Mitte)
   const last7=Array.from({length:7},(_,i)=>addDays(today,-3+i));
   return(
+  <div>
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
       <div style={{display:"flex",borderBottom:"2px solid #ece9e4",background:"#f9f7f3",flexShrink:0}}>
         {[["Ist","Ist"],["Soll","Soll"],["termine","Termine"]].map(([v,l])=>(
@@ -1020,6 +1024,8 @@ function WeekView({today,windows,getEntry,getAdaptedWins,tab,setTab,categories,g
         </div>
       </div>
     </div>
+    <PersonColorLegend persons={persons} personColors={personColors} onPersonColorChange={onPersonColorChange}/>
+  </div>
   );
 }
 
@@ -4129,7 +4135,14 @@ function DashboardView(props) {
   var showEvents = upcomingEvents.slice(0,3);
 
   // --- Einkaufsliste ---
-  var openItems = shoppingList.filter(function(i){ return !i.done && !i.recurring; });
+  // Nur Artikel anzeigen, die tatsächlich in der aktiven Liste sind:
+  // nicht erledigt UND (kein Wiederkehrender ODER Wiederkehrender ist fällig)
+  var openItems = shoppingList.filter(function(i){
+    if(i.done) return false;
+    if(!i.recurring) return true;
+    var diff = i.nextDue ? (new Date(i.nextDue+"T12:00:00") - new Date()) / (1000*60*60*24) : -1;
+    return diff <= 0;
+  });
   var showItems = openItems.slice(0,5);
 
   // --- Todos (aktive Person, offen) ---
