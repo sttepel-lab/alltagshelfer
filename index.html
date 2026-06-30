@@ -166,7 +166,25 @@ const STAR_WEIGHT = { 1:0.05, 2:0.10, 3:0.15, 4:0.20, 5:0.25 };
 const PERSON_ACCENT_POOL = ["#c0392b","#2471a3","#27ae60","#8e44ad","#e67e22","#16a085"];
 function personAccent(name,list,personColors){ return (personColors&&personColors[name])||PERSON_ACCENT_POOL[list.indexOf(name)%PERSON_ACCENT_POOL.length]; }
 
+// --- ROUTINE 2.0 (neues Feature, ersetzt "Routine alt" im Dashboard) ---------
+const DEFAULT_ROUTINE_CATEGORIES = [
+  { id:"sport",    label:"Sport & Bewegung",  color:"#b7d6a3" },
+  { id:"ernaehr",  label:"Ernaehrung",        color:"#f3c4ab" },
+  { id:"erholung", label:"Erholung",          color:"#cdb8e8" },
+  { id:"arbeit",   label:"Arbeit & Lernen",   color:"#a9d9ec" },
+  { id:"sonst",    label:"Sonstiges",         color:"#ddd8d0" },
+];
+// Pastell-Statusfarben fuer Routine 2.0 Zeitfenster
+const R2_STATUS_COLORS = {
+  offen:     { bg:"#faf3da", border:"#e6d9a8", text:"#7a6a2a" }, // gelb/pastell = Ausgangszustand
+  erledigt:  { bg:"#cfe8cf", border:"#9fcf9f", text:"#2d5a2d" }, // gruen/pastell
+  termin:    { bg:"#c9dff0", border:"#9cc4e0", text:"#1f4a6e" }, // blau/pastell = ausserordentlicher Termin
+  keinelust: { bg:"#f2c9c9", border:"#e0a0a0", text:"#7a2a2a" }, // rot/pastell = keine Lust
+};
+function r2EntryKey(person,date){ return person+"|"+date; }
+
 const DAY_START=5.0, DAY_END=23.0, PX_PER_HOUR=45;
+
 const TOTAL_HEIGHT=(DAY_END-DAY_START)*PX_PER_HOUR;
 
 // --- UTILS --------------------------------------------------------------------
@@ -240,7 +258,6 @@ const FB_COL = "appData";
 const FB_DOC = "main";
 const FB_GCAL_COL = "rp_gcal";
 
-// Laedt alle Daten aus Firestore und schreibt sie in localStorage
 async function fbLoadAll(){
   try{
     const db = getDB(); if(!db) return false;
@@ -249,11 +266,17 @@ async function fbLoadAll(){
     const data = snap.data();
     for(const [k,v] of Object.entries(data)){
       if(k === "entries"){
-        // Eintraege einzeln entpacken
         try{
           const all = JSON.parse(v);
           for(const [ek,ev] of Object.entries(all)){
             lsSet("entry2:"+ek, JSON.stringify(ev));
+          }
+        }catch{}
+      } else if(k === "rentries"){
+        try{
+          const all = JSON.parse(v);
+          for(const [ek,ev] of Object.entries(all)){
+            lsSet("rentry2:"+ek, JSON.stringify(ev));
           }
         }catch{}
       } else {
@@ -265,23 +288,20 @@ async function fbLoadAll(){
   }catch(e){ console.warn("Firebase load error:",e); return false; }
 }
 
-// Speichert alle Daten aus localStorage in Firestore
-// key/value: optional — das soeben geänderte Feld direkt mit übergeben (noch vor ls-Write)
 async function fbSaveAll(changedKey, changedValue){
   try{
     const db = getDB(); if(!db) return;
     const doc = {};
-    // Alle flachen Keys
     const flatKeys = [
       "cfg:persons3","cfg:windows3","cfg:categories1","cfg:appEvents1",
       "cfg:shoppingList1","cfg:todos1","cfg:favorites1","cfg:nutrition1",
-      "cfg:personProfiles1","cfg:recipes1","cfg:apiKey1","cfg:lastWriteTime1","cfg:personColors1","cfg:wishlist1"
+      "cfg:personProfiles1","cfg:recipes1","cfg:apiKey1","cfg:lastWriteTime1","cfg:personColors1","cfg:wishlist1",
+      "cfg:routineCategories1","cfg:routineActivities1","cfg:routineWindows2"
     ];
     for(const k of flatKeys){
       const val = (changedKey===k) ? changedValue : lsGet(k)?.value;
       if(val != null) doc[k] = val;
     }
-    // Alle Eintraege (entry2:) als ein JSON-Objekt verpacken
     const entryResult = lsList("entry2:");
     const allEntries = {};
     for(const ek of (entryResult?.keys||[])){
@@ -289,12 +309,24 @@ async function fbSaveAll(changedKey, changedValue){
       const ev = (changedKey===ek) ? changedValue : lsGet(ek)?.value;
       if(ev){ try{ allEntries[nk]=JSON.parse(ev); }catch{} }
     }
-    // Falls ein neuer Eintrag noch nicht in lsList ist
     if(changedKey?.startsWith("entry2:") && changedValue){
       const nk = changedKey.replace("entry2:","");
       if(!allEntries[nk]){ try{ allEntries[nk]=JSON.parse(changedValue); }catch{} }
     }
     doc["entries"] = JSON.stringify(allEntries);
+
+    const rEntryResult = lsList("rentry2:");
+    const allREntries = {};
+    for(const ek of (rEntryResult?.keys||[])){
+      const nk = ek.replace("rentry2:","");
+      const ev = (changedKey===ek) ? changedValue : lsGet(ek)?.value;
+      if(ev){ try{ allREntries[nk]=JSON.parse(ev); }catch{} }
+    }
+    if(changedKey?.startsWith("rentry2:") && changedValue){
+      const nk = changedKey.replace("rentry2:","");
+      if(!allREntries[nk]){ try{ allREntries[nk]=JSON.parse(changedValue); }catch{} }
+    }
+    doc["rentries"] = JSON.stringify(allREntries);
     doc["cfg:lastWriteTime1"] = String(Date.now());
     await db.collection(FB_COL).doc(FB_DOC).set(doc);
   }catch(e){ console.warn("Firebase save error:",e); }
@@ -381,6 +413,10 @@ const SK = {
   recipes:       "cfg:recipes1",
   apiKey:        "cfg:apiKey1",
   lastWriteTime: "cfg:lastWriteTime1",
+  routineCategories: "cfg:routineCategories1",
+  routineActivities: "cfg:routineActivities1",
+  routineWindows2:   "cfg:routineWindows2",
+  routineEntries:    "rentry2:", // prefix, key: "Person|YYYY-MM-DD"
 };
 
 // Alle bekannten Keys aus ALLEN bisherigen Versionen (vollstaendige Liste)
@@ -1564,6 +1600,7 @@ function PersonsTab({persons,onSave,personColors,onPersonColorChange}){
         const col=(personColors&&personColors[p])||PERSON_ACCENT_POOL[i%PERSON_ACCENT_POOL.length];
         return(
         <div key={i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,background:"#f9f7f3",borderRadius:8,padding:"7px 10px"}}>
+          {/* Farbkreis */}
           <label style={{cursor:"pointer",flexShrink:0}} title="Farbe ändern">
             <input type="color" value={col} onChange={e=>onPersonColorChange&&onPersonColorChange(p,e.target.value)}
               style={{width:0,height:0,opacity:0,position:"absolute",pointerEvents:"none"}} id={"cp-"+p}/>
@@ -1965,17 +2002,20 @@ function TodoView({todos,persons,activePerson,accent,onSave,filterPrio,filterPer
       .filter(t=>!filterPerson||filterPerson==="alle"||!t.assignedTo||t.assignedTo===filterPerson);
   }
 
+  // ToDo's: sonder-Items + fällige regel-Items (dueDate <= heute)
   const todoItems = applyFilters((todos||[]).filter(t=>{
     if(t.typ==="erledigt") return false;
     if(t.typ==="sonder") return true;
     if(t.typ==="regel") return t.dueDate && t.dueDate<=todayStr();
     return false;
   })).sort((a,b)=>{
+    // Frist/dueDate aufsteigend, dann Prio
     const aD=a.frist||a.dueDate||"9999-99-99", bD=b.frist||b.dueDate||"9999-99-99";
     if(aD!==bD) return aD.localeCompare(bD);
     return (PRIO_ORDER[a.prio||"gering"]||2)-(PRIO_ORDER[b.prio||"gering"]||2);
   });
 
+  // Wiederkehrend: nur regel-Items die NOCH NICHT fällig sind
   const regelItems = applyFilters((todos||[]).filter(t=>
     t.typ==="regel" && !(t.dueDate && t.dueDate<=todayStr())
   )).sort((a,b)=>{
@@ -2006,6 +2046,7 @@ function TodoView({todos,persons,activePerson,accent,onSave,filterPrio,filterPer
 
   function checkItem(t){
     if(t.typ==="regel"){
+      // Zurücksetzen: wieder in Wiederkehrend
       onSave((todos||[]).map(x=>x.id!==t.id?x:{...x,dueDate:addDays(todayStr(),x.intervalDays),lastDone:todayStr()}));
     } else {
       const erledigt={...t,typ:"erledigt",doneAt:todayStr()};
@@ -2040,10 +2081,12 @@ function TodoView({todos,persons,activePerson,accent,onSave,filterPrio,filterPer
     const diff=(new Date(frist+"T12:00:00")-new Date(todayStr()+"T12:00:00"))/(1000*60*60*24);
     if(diff<0) return "#c0392b"; if(diff<=3) return "#e67e22"; return "#555";
   }
+  function daysUntil(d){ return d?(new Date(d+"T12:00:00")-new Date(todayStr()+"T12:00:00"))/(1000*60*60*24):999; }
 
   const INPUT_STYLE={padding:"5px 8px",border:"1px solid #ddd",borderRadius:5,fontFamily:"Georgia,serif",fontSize:11,background:"#fff"};
   const BTN={padding:"5px 12px",borderRadius:5,border:"none",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:11,fontWeight:700};
 
+  // Monats-Gruppierung Erledigt
   const [openMonths,setOpenMonths]=useState({});
   function toggleMonth(key){ setOpenMonths(prev=>({...prev,[key]:!prev[key]})); }
   const erledigtByMonth=erledigtItems.reduce((acc,t)=>{ const k=(t.doneAt||"").slice(0,7); if(!acc[k]) acc[k]=[]; acc[k].push(t); return acc; },{});
@@ -2060,7 +2103,7 @@ function TodoView({todos,persons,activePerson,accent,onSave,filterPrio,filterPer
       const diff=Math.round((new Date(todayStr()+"T12:00:00")-new Date(t.frist+"T12:00:00"))/(1000*60*60*24));
       if(diff<=0) return "#fff";
       const f=Math.min(diff,10)/10;
-      return "rgb(255,"+Math.round(255*(1-f*0.85))+","+Math.round(255*(1-f*0.85))+")";
+      return `rgb(255,${Math.round(255*(1-f*0.85))},${Math.round(255*(1-f*0.85))})`;
     }
 
     return(
@@ -2115,7 +2158,7 @@ function TodoView({todos,persons,activePerson,accent,onSave,filterPrio,filterPer
                 )}
                 {t.typ==="sonder"&&t.frist&&(()=>{
                   const diff=Math.round((new Date(todayStr()+"T12:00:00")-new Date(t.frist+"T12:00:00"))/(1000*60*60*24));
-                  return React.createElement("span",{style:{fontSize:9,color:fristColor(t.frist),fontWeight:600}},"📅 "+(diff>0?"Überfällig – "+diff+"d":diff===0?"Heute fällig":"bis "+formatDate(t.frist,{day:"2-digit",month:"2-digit"})));
+                  return <span style={{fontSize:9,color:fristColor(t.frist),fontWeight:600}}>📅 {diff>0?`Überfällig – ${diff}d`:diff===0?"Heute fällig":"bis "+formatDate(t.frist,{day:"2-digit",month:"2-digit"})}</span>;
                 })()}
                 {t.typ==="regel"&&t.dueDate&&(
                   isRegelDue
@@ -2141,15 +2184,17 @@ function TodoView({todos,persons,activePerson,accent,onSave,filterPrio,filterPer
 
   return(
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:"transparent"}}>
+      {/* Tabs */}
       <div style={{display:"flex",background:"#fff",borderBottom:"2px solid #ece9e4",flexShrink:0}}>
         {[["sonder","ToDo's"],["regel","Wiederkehrend"],["erledigt","Erledigt"]].map(([v,l])=>(
           <button key={v} onClick={()=>setTab(v)} style={{padding:"8px 14px",border:"none",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:11,fontWeight:tab===v?700:400,background:tab===v?"#fff":"transparent",color:tab===v?"#111":"#aaa",borderBottom:tab===v?"2px solid #111":"none",marginBottom:-2}}>
-            {l}{v==="erledigt"&&erledigtItems.length>0?" ("+erledigtItems.length+")":""}
-            {v==="sonder"&&todoItems.length>0?" ("+todoItems.length+")":""}
+            {l}{v==="erledigt"&&erledigtItems.length>0?` (${erledigtItems.length})`:""}
+            {v==="sonder"&&todoItems.length>0?` (${todoItems.length})`:""}
           </button>
         ))}
       </div>
 
+      {/* Neue Aufgabe – nur im ToDo's-Tab */}
       {tab==="sonder"&&(
         <div style={{background:"#fff",borderBottom:"1px solid #ece9e4",padding:"8px 12px",flexShrink:0}}>
           <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
@@ -2171,6 +2216,7 @@ function TodoView({todos,persons,activePerson,accent,onSave,filterPrio,filterPer
             </select>
           </div>
           <div style={{display:"flex",gap:8,marginTop:6,alignItems:"center",flexWrap:"wrap"}}>
+            {/* Wiederkehrend-Checkbox */}
             <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",fontSize:11,color:"#555"}}>
               <div onClick={()=>{setNewRecurring(v=>!v);setShowIntervalBox(v=>!v);}}
                 style={{width:18,height:18,borderRadius:4,border:"2px solid "+(newRecurring?accent:"#ccc"),background:newRecurring?accent:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",transition:"all 0.15s",flexShrink:0}}>
@@ -2191,6 +2237,7 @@ function TodoView({todos,persons,activePerson,accent,onSave,filterPrio,filterPer
         </div>
       )}
 
+      {/* Liste */}
       <div style={{flex:1,overflowY:"auto",padding:"10px 12px"}}>
         {tab!=="erledigt"&&(
           curItems.length===0
@@ -2252,7 +2299,10 @@ function ShoppingView({items,persons,activePerson,accent,onAdd,onToggle,onDelete
   }
   function toggleWish(id){ onSaveWishlist&&onSaveWishlist(localWishlist.map(w=>w.id===id?{...w,done:!w.done}:w)); }
   function deleteWish(id){ onSaveWishlist&&onSaveWishlist(localWishlist.filter(w=>w.id!==id)); }
-  function moveWishToCart(w){ onAdd&&onAdd(w.text,""); deleteWish(w.id); }
+  function moveWishToCart(w){
+    onAdd&&onAdd(w.text,"");
+    deleteWish(w.id);
+  }
 
   function daysUntil(dateStr){
     if(!dateStr) return 0;
@@ -2716,6 +2766,7 @@ function computeMacroTargets(profile, tdee){
   return {kcal,protein,fett,carbs,water};
 }
 // ── GOOGLE CALENDAR OAuth2 Helpers ──────────────────────────────────────────
+// Alle Funktionen person-spezifisch – jede Person hat eigenen Token + Cache
 function gcalGetToken(person){
   if(!person) return null;
   try{
@@ -2733,6 +2784,7 @@ function gcalClearToken(person){
   localStorage.removeItem("rp:gcal_token_"+person);
   localStorage.removeItem("rp:gcal_expiry_"+person);
 }
+// Per-Person Cache (kein Ablauf – bleibt bis manuelles Neu-Laden)
 function gcalSaveEventsCache(person,events){
   try{ localStorage.setItem("rp:gcal_events_"+person,JSON.stringify(events)); }
   catch(e){ console.warn("GCal cache:",e); }
@@ -2786,6 +2838,7 @@ async function gcalClearEventsFromFirebase(person){
     await Promise.all(snap.docs.map(d=>d.ref.delete()));
   }catch(e){ console.warn("GCal Firebase clear:",e); }
 }
+// Alle Personen-Caches zu einem Date→Events-Map zusammenführen
 function gcalBuildEventsMap(persons,caches){
   const map={};
   persons.forEach(p=>{
@@ -2798,6 +2851,7 @@ function gcalBuildEventsMap(persons,caches){
   });
   return map;
 }
+// Bulk-Fetch: gestern bis +3 Jahre, mit Pagination
 async function gcalFetchAllEvents(token){
   const yesterday=new Date(); yesterday.setDate(yesterday.getDate()-1);
   const future=new Date(); future.setFullYear(future.getFullYear()+1);
@@ -3885,6 +3939,7 @@ function EventDetailModal({ev, onClose, persons, personColors, onUpdate, onDelet
     <div onClick={!confirmDelete?onClose:undefined} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 16px"}}>
       <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,width:"100%",maxWidth:380,boxShadow:"0 8px 40px rgba(0,0,0,.28)",overflow:"hidden"}}>
 
+        {/* Header */}
         <div style={{background:accentC,padding:"14px 16px 12px",position:"relative"}}>
           <div style={{fontSize:15,fontWeight:700,color:"#fff",lineHeight:1.3,paddingRight:52}}>
             {editing?draft.title||"Neuer Titel":initTitle}
@@ -3899,6 +3954,7 @@ function EventDetailModal({ev, onClose, persons, personColors, onUpdate, onDelet
           </div>
         </div>
 
+        {/* Body — Anzeigemodus */}
         {!editing&&(
           <div style={{padding:"14px 16px 6px",display:"flex",flexDirection:"column",gap:8}}>
             {dateLabel&&<div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:14}}>📅</span><span style={{fontSize:12,color:"#333"}}>{dateLabel}</span></div>}
@@ -3910,6 +3966,7 @@ function EventDetailModal({ev, onClose, persons, personColors, onUpdate, onDelet
           </div>
         )}
 
+        {/* Body — Bearbeitungsmodus */}
         {editing&&(
           <div style={{padding:"14px 16px 6px",display:"flex",flexDirection:"column",gap:12}}>
             <div>
@@ -3937,7 +3994,9 @@ function EventDetailModal({ev, onClose, persons, personColors, onUpdate, onDelet
           </div>
         )}
 
+        {/* Footer-Buttons */}
         <div style={{padding:"10px 16px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+          {/* Löschen */}
           {!isGcal&&!editing&&!confirmDelete&&(
             <button onClick={()=>setConfirmDelete(true)}
               style={{padding:"7px 14px",borderRadius:20,border:"none",background:"#fdecea",color:"#c0392b",fontFamily:"Georgia,serif",fontSize:12,cursor:"pointer",fontWeight:700}}>
@@ -3953,9 +4012,10 @@ function EventDetailModal({ev, onClose, persons, personColors, onUpdate, onDelet
           )}
           {(isGcal||editing)&&<div/>}
 
+          {/* Rechts: Abbrechen / Speichern */}
           <div style={{display:"flex",gap:8,marginLeft:"auto"}}>
             {editing?(
-              <React.Fragment>
+              <>
                 <button onClick={()=>setEditing(false)}
                   style={{padding:"7px 14px",borderRadius:20,border:"none",background:"#eee",color:"#333",fontFamily:"Georgia,serif",fontSize:12,cursor:"pointer"}}>
                   Abbrechen
@@ -3964,7 +4024,7 @@ function EventDetailModal({ev, onClose, persons, personColors, onUpdate, onDelet
                   style={{padding:"7px 16px",borderRadius:20,border:"none",background:saving||!draft.title.trim()||!draft.date?"#ccc":"#27ae60",color:"#fff",fontFamily:"Georgia,serif",fontSize:12,cursor:"pointer",fontWeight:700}}>
                   {saving?"…":"Speichern"}
                 </button>
-              </React.Fragment>
+              </>
             ):(
               <button onClick={onClose}
                 style={{padding:"7px 20px",borderRadius:20,border:"none",background:"#f0f0f0",color:"#333",fontFamily:"Georgia,serif",fontSize:12,cursor:"pointer",fontWeight:700}}>
@@ -4236,6 +4296,9 @@ function DashboardView(props) {
   var appEvents     = props.appEvents    || [];
   var accent        = props.accent       || "#c0392b";
   var recipes       = props.recipes      || [];
+  var routineWindows2   = props.routineWindows2   || {};
+  var routineEntries    = props.routineEntries    || {};
+  var routineActivities = props.routineActivities || [];
 
   var today   = new Date();
   var dayName = today.toLocaleDateString("de-DE", {weekday:"long"});
@@ -4289,6 +4352,12 @@ function DashboardView(props) {
   Object.values(dayEntry.windows||{}).forEach(function(w){ (w.aktivitaeten||[]).forEach(function(a){ allAkts.push(a); }); });
   var showAkts = allAkts.slice().sort(function(a,b){ return (parseTime(a.start)||0)-(parseTime(b.start)||0); }).slice(0,3);
 
+  // --- Routine 2.0 (neues Feature) ---
+  var r2Windows = routineWindows2[activePerson] || [];
+  var r2Day = routineEntries[r2EntryKey(activePerson,activeDate)] || {windows:{}};
+  var r2Open = r2Windows.filter(function(w){ var d=r2Day.windows[w.id]; return !d||d.status==="offen"; }).slice(0,3);
+  var r2DoneCount = r2Windows.filter(function(w){ var d=r2Day.windows[w.id]; return d&&d.status==="erledigt"; }).length;
+
   // --- Ernährung ---
   var nutrDay     = nutritionData[activePerson+"|"+activeDate] || {wasser:0, mahlzeiten:[]};
   var eaten       = (nutrDay.mahlzeiten||[]).reduce(function(s,m){ return s+(m.kcal||0); }, 0);
@@ -4316,21 +4385,23 @@ function DashboardView(props) {
 
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,padding:"4px 12px 24px",flex:1}}>
 
-        {/* Routine */}
-        <DashCard title="Routine" accentColor={accent} onClick={function(){ onNavigate("tag"); }}>
-          {showAkts.length===0
-            ? <div style={{color:"#555",fontSize:11,marginTop:2}}>Keine Einträge heute</div>
-            : showAkts.map(function(a,i){
-                return (
-                  <div key={a.id||i} style={{display:"flex",alignItems:"center",gap:5,marginBottom:4}}>
-                    <div style={{width:5,height:5,borderRadius:"50%",background:accent,flexShrink:0}}/>
-                    <div style={{fontSize:11,color:"#333",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>{a.label}</div>
-                    {a.start&&<div style={{fontSize:8,color:"#3a3a3a",flexShrink:0}}>{a.start}</div>}
-                  </div>
-                );
-              })
+        {/* Routine (neu) */}
+        <DashCard title="Routine" accentColor={accent} onClick={function(){ onNavigate("routine2"); }}>
+          {r2Windows.length===0
+            ? <div style={{color:"#555",fontSize:11,marginTop:2}}>Noch nicht eingerichtet</div>
+            : r2Open.length===0
+              ? <div style={{color:"#555",fontSize:11,marginTop:2}}>Alles erledigt ✓</div>
+              : r2Open.map(function(w,i){
+                  return (
+                    <div key={w.id||i} style={{display:"flex",alignItems:"center",gap:5,marginBottom:4}}>
+                      <div style={{width:5,height:5,borderRadius:"50%",background:accent,flexShrink:0}}/>
+                      <div style={{fontSize:11,color:"#333",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>{w.label}</div>
+                      <div style={{fontSize:8,color:"#3a3a3a",flexShrink:0}}>{w.sollStart}</div>
+                    </div>
+                  );
+                })
           }
-          {allAkts.length>3&&<div style={{fontSize:9,color:"#777",marginTop:1}}>+{allAkts.length-3} weitere</div>}
+          {r2DoneCount>0&&<div style={{fontSize:9,color:"#777",marginTop:1}}>{r2DoneCount} erledigt</div>}
         </DashCard>
 
         {/* Kalender */}
@@ -4431,6 +4502,23 @@ function DashboardView(props) {
             })}
             <div style={{marginTop:4,fontSize:9,color:"#555"}}>⚙ Konfiguration</div>
           </div>
+        </DashCard>
+
+        {/* Routine alt */}
+        <DashCard title="Routine alt" accentColor="#999" onClick={function(){ onNavigate("tag"); }}>
+          {showAkts.length===0
+            ? <div style={{color:"#555",fontSize:11,marginTop:2}}>Keine Einträge heute</div>
+            : showAkts.map(function(a,i){
+                return (
+                  <div key={a.id||i} style={{display:"flex",alignItems:"center",gap:5,marginBottom:4}}>
+                    <div style={{width:5,height:5,borderRadius:"50%",background:"#999",flexShrink:0}}/>
+                    <div style={{fontSize:11,color:"#333",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>{a.label}</div>
+                    {a.start&&<div style={{fontSize:8,color:"#3a3a3a",flexShrink:0}}>{a.start}</div>}
+                  </div>
+                );
+              })
+          }
+          {allAkts.length>3&&<div style={{fontSize:9,color:"#777",marginTop:1}}>+{allAkts.length-3} weitere</div>}
         </DashCard>
 
       </div>
@@ -4797,6 +4885,460 @@ function ViewBgSvg({view, dark}){
   return null;
 }
 
+// =====================================================================
+// ROUTINE 2.0 — neues Feature (ersetzt "Routine" im Dashboard)
+// =====================================================================
+const R2_PX_PER_HOUR = 64;
+const R2_TOTAL_HEIGHT = (DAY_END-DAY_START)*R2_PX_PER_HOUR;
+function r2TimeToY(h){ return (h-DAY_START)*R2_PX_PER_HOUR; }
+function r2YToTime(y){
+  var h = DAY_START + y/R2_PX_PER_HOUR;
+  h = Math.round(h*12)/12; // 5-Minuten-Raster
+  return Math.max(DAY_START, Math.min(DAY_END, h));
+}
+function r2DecToHHMM(dec){
+  var h=Math.floor(dec), m=Math.round((dec-h)*60);
+  if(m===60){m=0;h+=1;}
+  return String(h).padStart(2,"0")+":"+String(m).padStart(2,"0");
+}
+
+function RoutineNeuView(props){
+  var persons          = props.persons || [];
+  var activePerson      = props.activePerson;
+  var activeDate        = props.activeDate;
+  var routineCategories = props.routineCategories || [];
+  var routineActivities = props.routineActivities || [];
+  var routineWindows2   = props.routineWindows2 || {};
+  var routineEntries    = props.routineEntries || {};
+  var onSaveCategories  = props.onSaveCategories;
+  var onSaveActivities  = props.onSaveActivities;
+  var onSaveWindows     = props.onSaveWindows;
+  var onSaveEntry       = props.onSaveEntry;
+  var accent            = props.accent || "#c0392b";
+
+  var [tab,setTab] = React.useState("heute");
+  var windows = routineWindows2[activePerson] || [];
+  var dayKey  = r2EntryKey(activePerson, activeDate);
+  var dayData = routineEntries[dayKey] || {windows:{}};
+
+  function getAktForWindow(w){
+    return (w.activityIds||[]).map(function(id){ return routineActivities.find(function(a){return a.id===id;}); }).filter(Boolean);
+  }
+  function durationH(w){
+    var s=parseTime(w.sollStart), e=parseTime(w.sollEnde);
+    if(s==null||e==null) return 1;
+    return e>s ? e-s : (24-s+e);
+  }
+
+  return (
+    <div style={{flex:1,overflowY:"auto",display:"flex",flexDirection:"column"}}>
+      <div style={{display:"flex",gap:4,padding:"10px 12px 4px",flexShrink:0}}>
+        {[["heute","Heute"],["windows","Zeitfenster"],["akts","Aktivitäten"],["kats","Kategorien"]].map(function(t){
+          return (
+            <button key={t[0]} onClick={function(){setTab(t[0]);}}
+              style={{flex:1,padding:"7px 4px",borderRadius:10,border:"1px solid #e0ddd8",cursor:"pointer",
+                background:tab===t[0]?accent:"#f5f3ef",color:tab===t[0]?"#fff":"#555",fontSize:11,fontWeight:600}}>
+              {t[1]}
+            </button>
+          );
+        })}
+      </div>
+
+      {tab==="heute" && (
+        <R2HeuteTab person={activePerson} date={activeDate} windows={windows} dayData={dayData}
+          routineActivities={routineActivities} routineCategories={routineCategories}
+          getAktForWindow={getAktForWindow} durationH={durationH}
+          onSaveEntry={onSaveEntry} accent={accent}/>
+      )}
+      {tab==="windows" && (
+        <R2WindowsTab persons={persons} activePerson={activePerson} routineWindows2={routineWindows2}
+          routineActivities={routineActivities} onSave={onSaveWindows} accent={accent}/>
+      )}
+      {tab==="akts" && (
+        <R2ActivitiesTab routineActivities={routineActivities} routineCategories={routineCategories}
+          onSave={onSaveActivities} accent={accent}/>
+      )}
+      {tab==="kats" && (
+        <R2CategoriesTab routineCategories={routineCategories} onSave={onSaveCategories} accent={accent}/>
+      )}
+    </div>
+  );
+}
+
+// --- Heute-Tab: Soll/Ist Tagesausführung -------------------------------------
+function R2HeuteTab(props){
+  var windows = props.windows, dayData = props.dayData, person=props.person, date=props.date;
+  var routineActivities=props.routineActivities, getAktForWindow=props.getAktForWindow, durationH=props.durationH;
+  var onSaveEntry = props.onSaveEntry, accent=props.accent;
+  var [verwerfFor,setVerwerfFor] = React.useState(null); // windowId, fuer Popup
+  var [editIst,setEditIst] = React.useState(null); // windowId, fuer Bearbeiten-Modal
+  var [dragWin,setDragWin] = React.useState(null);
+  var dragRef = React.useRef({y0:0, start0:0});
+  var trackRef = React.useRef(null);
+
+  var sollWindows = windows.filter(function(w){ var d=dayData.windows[w.id]; return !d || d.status!=="erledigt"; });
+  var istWindows  = windows.filter(function(w){ var d=dayData.windows[w.id]; return d && d.status==="erledigt"; });
+
+  var aktivKcalSum = istWindows.reduce(function(sum,w){
+    var d=dayData.windows[w.id];
+    return sum + (d && d.kcalBurned ? d.kcalBurned : 0);
+  },0);
+
+  function chooseAkt(w, aktId){
+    onSaveEntry(person,date,w.id,{chosenActivityId:aktId});
+  }
+  function abhaken(w){
+    var akts = getAktForWindow(w);
+    var d = dayData.windows[w.id]||{};
+    var chosenId = d.chosenActivityId || (akts.length===1 ? akts[0].id : null);
+    if(!chosenId) return;
+    var akt = akts.find(function(a){return a.id===chosenId;}) || routineActivities.find(function(a){return a.id===chosenId;});
+    var kcal = akt && akt.kcalPerHour ? Math.round(akt.kcalPerHour*durationH(w)) : 0;
+    onSaveEntry(person,date,w.id,{status:"erledigt", chosenActivityId:chosenId, istStart:w.sollStart, kcalBurned:kcal});
+  }
+  function setVerwerfGrund(w, grund){
+    onSaveEntry(person,date,w.id,{status:grund}); // "termin" | "keinelust"
+    setVerwerfFor(null);
+  }
+  function zurueckSetzen(w){
+    onSaveEntry(person,date,w.id,{status:"offen", kcalBurned:0});
+    setEditIst(null);
+  }
+  function setIstTime(w, hhmm){
+    onSaveEntry(person,date,w.id,{istStart:hhmm});
+  }
+
+  function onPointerDownIst(e,w){
+    e.preventDefault();
+    var d = dayData.windows[w.id]||{};
+    var startDec = parseTime(d.istStart||w.sollStart) || DAY_START;
+    dragRef.current = {y0:e.clientY, start0:startDec};
+    setDragWin(w.id);
+  }
+  React.useEffect(function(){
+    if(!dragWin) return;
+    function move(e){
+      var dy = e.clientY - dragRef.current.y0;
+      var newDec = dragRef.current.start0 + dy/R2_PX_PER_HOUR;
+      newDec = Math.round(newDec*12)/12;
+      newDec = Math.max(DAY_START, Math.min(DAY_END, newDec));
+      var w = windows.find(function(ww){return ww.id===dragWin;});
+      if(w) setIstTime(w, r2DecToHHMM(newDec));
+    }
+    function up(){ setDragWin(null); }
+    window.addEventListener("pointermove",move);
+    window.addEventListener("pointerup",up);
+    return function(){ window.removeEventListener("pointermove",move); window.removeEventListener("pointerup",up); };
+  },[dragWin]);
+
+  return (
+    <div style={{padding:"6px 12px 24px"}}>
+      {aktivKcalSum>0 && (
+        <div style={{fontSize:11,color:"#7a5c00",background:"#faf3da",border:"1px solid #e6d9a8",borderRadius:10,padding:"6px 10px",marginBottom:10}}>
+          🔥 Aktive Kalorien heute: <b>{aktivKcalSum} kcal</b>
+        </div>
+      )}
+
+      <div style={{fontSize:10,letterSpacing:1.5,color:"#999",textTransform:"uppercase",marginBottom:6}}>Soll</div>
+      {sollWindows.length===0 && <div style={{fontSize:11,color:"#888",marginBottom:14}}>Alles erledigt ✓</div>}
+      {sollWindows.map(function(w){
+        var d = dayData.windows[w.id]||{};
+        var akts = getAktForWindow(w);
+        var status = d.status || "offen";
+        var col = R2_STATUS_COLORS[status] || R2_STATUS_COLORS.offen;
+        var chosenId = d.chosenActivityId || (akts.length===1 ? akts[0].id : null);
+        var chosen = akts.find(function(a){return a.id===chosenId;});
+        return (
+          <div key={w.id} style={{background:col.bg,border:"1px solid "+col.border,borderRadius:12,padding:"9px 11px",marginBottom:8}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:akts.length?5:0}}>
+              <div style={{fontSize:11,fontWeight:700,color:col.text}}>{w.label}</div>
+              <div style={{fontSize:10,color:col.text,opacity:.75}}>{w.sollStart}–{w.sollEnde}</div>
+            </div>
+            {status==="termin" && <div style={{fontSize:11,color:col.text}}>📅 Außerordentlicher Termin</div>}
+            {status==="keinelust" && <div style={{fontSize:11,color:col.text}}>✕ Keine Lust</div>}
+            {status==="offen" && akts.length===0 && <div style={{fontSize:11,color:"#999"}}>Keine Aktivität zugeordnet</div>}
+            {status==="offen" && akts.length>0 && (
+              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                {akts.length>1 ? (
+                  <select value={chosenId||""} onChange={function(e){chooseAkt(w,e.target.value||null);}}
+                    style={{flex:1,fontSize:11,padding:"5px 6px",borderRadius:8,border:"1px solid "+col.border,background:"#fff",color:"#333"}}>
+                    <option value="">– auswählen –</option>
+                    {akts.map(function(a){ return <option key={a.id} value={a.id}>{a.title}</option>; })}
+                  </select>
+                ) : (
+                  <div style={{flex:1,fontSize:12,color:"#333",fontWeight:600}}>{chosen?chosen.title:""}</div>
+                )}
+                <button onClick={function(){abhaken(w);}} disabled={!chosenId}
+                  style={{width:30,height:30,borderRadius:"50%",border:"none",cursor:chosenId?"pointer":"default",
+                    background:chosenId?"#cfe8cf":"#eee",color:chosenId?"#2d5a2d":"#bbb",fontSize:15,flexShrink:0}}>✓</button>
+                <button onClick={function(){setVerwerfFor(w.id);}}
+                  style={{width:30,height:30,borderRadius:"50%",border:"none",cursor:"pointer",
+                    background:"#f2c9c9",color:"#7a2a2a",fontSize:13,flexShrink:0}}>✕</button>
+              </div>
+            )}
+            {verwerfFor===w.id && (
+              <div style={{marginTop:8,display:"flex",gap:6}}>
+                <button onClick={function(){setVerwerfGrund(w,"termin");}}
+                  style={{flex:1,fontSize:10,padding:"6px 4px",borderRadius:8,border:"1px solid #9cc4e0",background:"#c9dff0",color:"#1f4a6e",cursor:"pointer"}}>
+                  Außerordentl. Termin
+                </button>
+                <button onClick={function(){setVerwerfGrund(w,"keinelust");}}
+                  style={{flex:1,fontSize:10,padding:"6px 4px",borderRadius:8,border:"1px solid #e0a0a0",background:"#f2c9c9",color:"#7a2a2a",cursor:"pointer"}}>
+                  Keine Lust
+                </button>
+                <button onClick={function(){setVerwerfFor(null);}}
+                  style={{fontSize:10,padding:"6px 8px",borderRadius:8,border:"1px solid #ddd",background:"#fff",color:"#888",cursor:"pointer"}}>
+                  Abbr.
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <div style={{fontSize:10,letterSpacing:1.5,color:"#999",textTransform:"uppercase",margin:"18px 0 6px"}}>Ist</div>
+      {istWindows.length===0 && <div style={{fontSize:11,color:"#888",marginBottom:14}}>Noch nichts erledigt</div>}
+      <div ref={trackRef} style={{position:"relative",minHeight:Math.max(60,istWindows.length*46),touchAction:"none"}}>
+        {istWindows.slice().sort(function(a,b){
+          var da=dayData.windows[a.id]||{}, db=dayData.windows[b.id]||{};
+          return (parseTime(da.istStart||a.sollStart)||0)-(parseTime(db.istStart||b.sollStart)||0);
+        }).map(function(w){
+          var d = dayData.windows[w.id]||{};
+          var akt = routineActivities.find(function(a){return a.id===d.chosenActivityId;});
+          var col = R2_STATUS_COLORS.erledigt;
+          return (
+            <div key={w.id}
+              onPointerDown={function(e){onPointerDownIst(e,w);}}
+              onDoubleClick={function(){setEditIst(w.id);}}
+              style={{background:col.bg,border:"1px solid "+col.border,borderRadius:10,padding:"7px 10px",
+                marginBottom:6,cursor:"grab",display:"flex",justifyContent:"space-between",alignItems:"center",
+                userSelect:"none",opacity:dragWin===w.id?0.7:1}}>
+              <div style={{fontSize:11,color:col.text,fontWeight:600}}>{akt?akt.title:w.label}</div>
+              <div style={{fontSize:10,color:col.text,opacity:.8}}>{d.istStart||w.sollStart}{d.kcalBurned?" · "+d.kcalBurned+" kcal":""}</div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{fontSize:9,color:"#aaa",marginTop:4}}>↕ Ziehen zum Verschieben · Doppelklick zum Bearbeiten</div>
+
+      {editIst && (function(){
+        var w = windows.find(function(ww){return ww.id===editIst;});
+        if(!w) return null;
+        var d = dayData.windows[w.id]||{};
+        return (
+          <div onClick={function(){setEditIst(null);}} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200}}>
+            <div onClick={function(e){e.stopPropagation();}} style={{background:"#fff",borderRadius:14,padding:16,width:260}}>
+              <div style={{fontSize:13,fontWeight:700,marginBottom:10}}>{w.label} bearbeiten</div>
+              <label style={{fontSize:11,color:"#777"}}>Uhrzeit (Ist)</label>
+              <input type="time" value={d.istStart||w.sollStart} onChange={function(e){setIstTime(w,e.target.value);}}
+                style={{width:"100%",fontSize:13,padding:"7px 8px",borderRadius:8,border:"1px solid #ddd",margin:"4px 0 12px"}}/>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={function(){zurueckSetzen(w);}}
+                  style={{flex:1,fontSize:11,padding:"8px",borderRadius:8,border:"1px solid #e0a0a0",background:"#f2c9c9",color:"#7a2a2a",cursor:"pointer"}}>
+                  ↩ Zurück zu Soll
+                </button>
+                <button onClick={function(){setEditIst(null);}}
+                  style={{flex:1,fontSize:11,padding:"8px",borderRadius:8,border:"1px solid #ddd",background:"#f5f3ef",color:"#555",cursor:"pointer"}}>
+                  Schließen
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+// --- Zeitfenster-Tab: Zuordnung Aktivitäten <-> Zeitfenster (pro Person) ----
+function R2WindowsTab(props){
+  var persons=props.persons, activePerson=props.activePerson, routineWindows2=props.routineWindows2;
+  var routineActivities=props.routineActivities, onSave=props.onSave, accent=props.accent;
+  var [editFor,setEditFor]=React.useState(activePerson);
+  var windows = routineWindows2[editFor] || [];
+  var [form,setForm] = React.useState(null); // {id?,label,sollStart,sollEnde,activityIds}
+
+  function startNew(){ setForm({id:null,label:"",sollStart:"08:00",sollEnde:"09:00",activityIds:[]}); }
+  function edit(w){ setForm({...w}); }
+  function remove(id){
+    var nw = windows.filter(function(w){return w.id!==id;});
+    onSave({...routineWindows2,[editFor]:nw});
+  }
+  function save(){
+    if(!form.label) return;
+    var id = form.id || ("rw_"+Date.now());
+    var nw = form.id ? windows.map(function(w){return w.id===id?{...form,id:id}:w;}) : windows.concat([{...form,id:id}]);
+    onSave({...routineWindows2,[editFor]:nw});
+    setForm(null);
+  }
+  function toggleAkt(aid){
+    var ids = form.activityIds||[];
+    setForm({...form, activityIds: ids.includes(aid)?ids.filter(function(x){return x!==aid;}):ids.concat([aid])});
+  }
+
+  return (
+    <div style={{padding:"6px 12px 24px"}}>
+      <div style={{display:"flex",gap:4,marginBottom:10}}>
+        {persons.map(function(p){
+          return <button key={p} onClick={function(){setEditFor(p);}}
+            style={{padding:"5px 10px",borderRadius:8,border:"1px solid #e0ddd8",fontSize:11,cursor:"pointer",
+              background:editFor===p?accent:"#f5f3ef",color:editFor===p?"#fff":"#555"}}>{p}</button>;
+        })}
+      </div>
+      {windows.map(function(w){
+        return (
+          <div key={w.id} style={{display:"flex",alignItems:"center",gap:8,background:"#f5f3ef",borderRadius:10,padding:"8px 10px",marginBottom:6}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:12,fontWeight:600,color:"#333"}}>{w.label}</div>
+              <div style={{fontSize:10,color:"#888"}}>{w.sollStart}–{w.sollEnde} · {(w.activityIds||[]).length} Aktivität(en)</div>
+            </div>
+            <button onClick={function(){edit(w);}} style={{border:"none",background:"none",cursor:"pointer",fontSize:13,color:"#777"}}>✎</button>
+            <button onClick={function(){remove(w.id);}} style={{border:"none",background:"none",cursor:"pointer",fontSize:13,color:"#c0392b"}}>🗑</button>
+          </div>
+        );
+      })}
+      <button onClick={startNew} style={{width:"100%",padding:"9px",borderRadius:10,border:"1px dashed "+accent,background:"none",color:accent,fontSize:12,cursor:"pointer",marginTop:6}}>+ Zeitfenster</button>
+
+      {form && (
+        <div style={{marginTop:14,background:"#fff",border:"1px solid #e0ddd8",borderRadius:12,padding:12}}>
+          <input value={form.label} onChange={function(e){setForm({...form,label:e.target.value});}} placeholder="Bezeichnung"
+            style={{width:"100%",fontSize:12,padding:"7px 8px",borderRadius:8,border:"1px solid #ddd",marginBottom:8}}/>
+          <div style={{display:"flex",gap:8,marginBottom:10}}>
+            <input type="time" value={form.sollStart} onChange={function(e){setForm({...form,sollStart:e.target.value});}}
+              style={{flex:1,fontSize:12,padding:"7px 8px",borderRadius:8,border:"1px solid #ddd"}}/>
+            <input type="time" value={form.sollEnde} onChange={function(e){setForm({...form,sollEnde:e.target.value});}}
+              style={{flex:1,fontSize:12,padding:"7px 8px",borderRadius:8,border:"1px solid #ddd"}}/>
+          </div>
+          <div style={{fontSize:10,color:"#888",marginBottom:6}}>Aktivitäten zuordnen (mehrere möglich)</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}}>
+            {routineActivities.map(function(a){
+              var sel = (form.activityIds||[]).includes(a.id);
+              return (
+                <button key={a.id} onClick={function(){toggleAkt(a.id);}}
+                  style={{fontSize:10,padding:"5px 9px",borderRadius:14,border:"1px solid "+(sel?accent:"#ddd"),
+                    background:sel?accent:"#f5f3ef",color:sel?"#fff":"#555",cursor:"pointer"}}>{a.title}</button>
+              );
+            })}
+            {routineActivities.length===0 && <div style={{fontSize:10,color:"#aaa"}}>Noch keine Aktivitäten angelegt</div>}
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={save} style={{flex:1,padding:"9px",borderRadius:8,border:"none",background:accent,color:"#fff",fontSize:12,cursor:"pointer"}}>Speichern</button>
+            <button onClick={function(){setForm(null);}} style={{flex:1,padding:"9px",borderRadius:8,border:"1px solid #ddd",background:"#fff",color:"#777",fontSize:12,cursor:"pointer"}}>Abbrechen</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Aktivitäten-Tab ---------------------------------------------------------
+function R2ActivitiesTab(props){
+  var routineActivities=props.routineActivities, routineCategories=props.routineCategories, onSave=props.onSave, accent=props.accent;
+  var [form,setForm]=React.useState(null);
+
+  function startNew(){ setForm({id:null,title:"",categoryId:routineCategories[0]?routineCategories[0].id:"",description:"",kcalPerHour:0}); }
+  function edit(a){ setForm({...a}); }
+  function remove(id){ onSave(routineActivities.filter(function(a){return a.id!==id;})); }
+  function save(){
+    if(!form.title) return;
+    var id = form.id || ("ra_"+Date.now());
+    var list = form.id ? routineActivities.map(function(a){return a.id===id?{...form,id:id}:a;}) : routineActivities.concat([{...form,id:id}]);
+    onSave(list);
+    setForm(null);
+  }
+
+  return (
+    <div style={{padding:"6px 12px 24px"}}>
+      {routineActivities.map(function(a){
+        var cat = routineCategories.find(function(c){return c.id===a.categoryId;});
+        return (
+          <div key={a.id} style={{display:"flex",alignItems:"center",gap:8,background:"#f5f3ef",borderRadius:10,padding:"8px 10px",marginBottom:6}}>
+            <div style={{width:9,height:9,borderRadius:"50%",background:cat?cat.color:"#ccc",flexShrink:0}}/>
+            <div style={{flex:1}}>
+              <div style={{fontSize:12,fontWeight:600,color:"#333"}}>{a.title}</div>
+              <div style={{fontSize:10,color:"#888"}}>{cat?cat.label:"–"}{a.kcalPerHour?" · "+a.kcalPerHour+" kcal/h":""}</div>
+            </div>
+            <button onClick={function(){edit(a);}} style={{border:"none",background:"none",cursor:"pointer",fontSize:13,color:"#777"}}>✎</button>
+            <button onClick={function(){remove(a.id);}} style={{border:"none",background:"none",cursor:"pointer",fontSize:13,color:"#c0392b"}}>🗑</button>
+          </div>
+        );
+      })}
+      <button onClick={startNew} style={{width:"100%",padding:"9px",borderRadius:10,border:"1px dashed "+accent,background:"none",color:accent,fontSize:12,cursor:"pointer",marginTop:6}}>+ Aktivität</button>
+
+      {form && (
+        <div style={{marginTop:14,background:"#fff",border:"1px solid #e0ddd8",borderRadius:12,padding:12}}>
+          <input value={form.title} onChange={function(e){setForm({...form,title:e.target.value});}} placeholder="Titel"
+            style={{width:"100%",fontSize:12,padding:"7px 8px",borderRadius:8,border:"1px solid #ddd",marginBottom:8}}/>
+          <select value={form.categoryId} onChange={function(e){setForm({...form,categoryId:e.target.value});}}
+            style={{width:"100%",fontSize:12,padding:"7px 8px",borderRadius:8,border:"1px solid #ddd",marginBottom:8}}>
+            {routineCategories.map(function(c){ return <option key={c.id} value={c.id}>{c.label}</option>; })}
+          </select>
+          <textarea value={form.description} onChange={function(e){setForm({...form,description:e.target.value});}} placeholder="Beschreibung"
+            style={{width:"100%",fontSize:12,padding:"7px 8px",borderRadius:8,border:"1px solid #ddd",marginBottom:8,minHeight:50,resize:"vertical"}}/>
+          <input type="number" value={form.kcalPerHour} onChange={function(e){setForm({...form,kcalPerHour:Number(e.target.value)||0});}} placeholder="Aktive kcal/h"
+            style={{width:"100%",fontSize:12,padding:"7px 8px",borderRadius:8,border:"1px solid #ddd",marginBottom:10}}/>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={save} style={{flex:1,padding:"9px",borderRadius:8,border:"none",background:accent,color:"#fff",fontSize:12,cursor:"pointer"}}>Speichern</button>
+            <button onClick={function(){setForm(null);}} style={{flex:1,padding:"9px",borderRadius:8,border:"1px solid #ddd",background:"#fff",color:"#777",fontSize:12,cursor:"pointer"}}>Abbrechen</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Kategorien-Tab -----------------------------------------------------------
+function R2CategoriesTab(props){
+  var routineCategories=props.routineCategories, onSave=props.onSave, accent=props.accent;
+  var [form,setForm]=React.useState(null);
+  var palette = ["#b7d6a3","#f3c4ab","#cdb8e8","#a9d9ec","#f6d9a0","#d9c2b0","#ddd8d0","#bcd9c4"];
+
+  function startNew(){ setForm({id:null,label:"",color:palette[routineCategories.length%palette.length]}); }
+  function edit(c){ setForm({...c}); }
+  function remove(id){ onSave(routineCategories.filter(function(c){return c.id!==id;})); }
+  function save(){
+    if(!form.label) return;
+    var id = form.id || ("rc_"+Date.now());
+    var list = form.id ? routineCategories.map(function(c){return c.id===id?{...form,id:id}:c;}) : routineCategories.concat([{...form,id:id}]);
+    onSave(list);
+    setForm(null);
+  }
+
+  return (
+    <div style={{padding:"6px 12px 24px"}}>
+      {routineCategories.map(function(c){
+        return (
+          <div key={c.id} style={{display:"flex",alignItems:"center",gap:8,background:"#f5f3ef",borderRadius:10,padding:"8px 10px",marginBottom:6}}>
+            <div style={{width:16,height:16,borderRadius:"50%",background:c.color,flexShrink:0,border:"1px solid rgba(0,0,0,.1)"}}/>
+            <div style={{flex:1,fontSize:12,color:"#333",fontWeight:600}}>{c.label}</div>
+            <button onClick={function(){edit(c);}} style={{border:"none",background:"none",cursor:"pointer",fontSize:13,color:"#777"}}>✎</button>
+            <button onClick={function(){remove(c.id);}} style={{border:"none",background:"none",cursor:"pointer",fontSize:13,color:"#c0392b"}}>🗑</button>
+          </div>
+        );
+      })}
+      <button onClick={startNew} style={{width:"100%",padding:"9px",borderRadius:10,border:"1px dashed "+accent,background:"none",color:accent,fontSize:12,cursor:"pointer",marginTop:6}}>+ Kategorie</button>
+
+      {form && (
+        <div style={{marginTop:14,background:"#fff",border:"1px solid #e0ddd8",borderRadius:12,padding:12}}>
+          <input value={form.label} onChange={function(e){setForm({...form,label:e.target.value});}} placeholder="Name"
+            style={{width:"100%",fontSize:12,padding:"7px 8px",borderRadius:8,border:"1px solid #ddd",marginBottom:8}}/>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}}>
+            {palette.map(function(col){
+              return <div key={col} onClick={function(){setForm({...form,color:col});}}
+                style={{width:24,height:24,borderRadius:"50%",background:col,cursor:"pointer",
+                  border:form.color===col?"2px solid #333":"1px solid rgba(0,0,0,.1)"}}/>;
+            })}
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={save} style={{flex:1,padding:"9px",borderRadius:8,border:"none",background:accent,color:"#fff",fontSize:12,cursor:"pointer"}}>Speichern</button>
+            <button onClick={function(){setForm(null);}} style={{flex:1,padding:"9px",borderRadius:8,border:"1px solid #ddd",background:"#fff",color:"#777",fontSize:12,cursor:"pointer"}}>Abbrechen</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App(){
   const [persons,setPersons]=useState(Object.keys(DEFAULT_WINDOWS));
   const [windowsMap,setWindowsMap]=useState(DEFAULT_WINDOWS);
@@ -4838,12 +5380,17 @@ function App(){
   const [wishlist,setWishlist] = useState([]);
   const [recipes,setRecipes] = useState([]);
   const [apiKey,setApiKey]   = useState("");
+  const [routineCategories,setRoutineCategories] = useState(DEFAULT_ROUTINE_CATEGORIES);
+  const [routineActivities,setRoutineActivities] = useState([]);
+  const [routineWindows2,setRoutineWindows2]     = useState({});
+  const [routineEntries,setRoutineEntries]       = useState({});
   const [gcalLoading,setGcalLoading] = useState(false);
   const [gcalDate,setGcalDate] = useState(todayStr());
   const gcalLoadedRef = useRef(false);
-  // GCal OAuth
+  // GCal OAuth: tokens pro Person { Stefan: "...", Lisa: null, ... }
   const [gcalTokens,setGcalTokens] = useState({});
   const gcalClientRef = useRef(null);
+  // Abgeleiteter Token der aktiven Person (für Settings-Anzeige + GCal-Create)
   const gcalToken = gcalTokens[activePerson]||null;
 
   // Dropdowns schliessen bei Klick ausserhalb
@@ -4858,6 +5405,8 @@ function App(){
   },[]);
 
   function gcalConnect(){
+    // GIS Script lazy laden - erst wenn der User verbinden möchte
+    // Jedes Mal neu initialisieren damit activePerson im Callback aktuell ist
     const connectPerson=activePerson;
     const s=document.createElement("script");
     s.src="https://accounts.google.com/gsi/client";
@@ -4869,16 +5418,19 @@ function App(){
           if(resp.error){ console.error("GCal OAuth error:",resp.error); return; }
           gcalSaveToken(connectPerson,resp.access_token,resp.expires_in||3600);
           setGcalTokens(prev=>({...prev,[connectPerson]:resp.access_token}));
+          // Sofort Events für diese Person laden und mergen
           setGcalLoading(true);
           gcalFetchAllEvents(resp.access_token).then(evs=>{
             gcalSaveEventsCache(connectPerson,evs);
             gcalSaveEventsToFirebase(connectPerson,evs);
             setGcalEvents(prev=>{
-              const newMap={};
+              // Behalte Events anderer Personen, ersetze nur diese Person
+              const otherEvs={};
               Object.keys(prev).forEach(date=>{
                 const filtered=(prev[date]||[]).filter(ev=>ev._person!==connectPerson);
-                if(filtered.length) newMap[date]=filtered;
+                if(filtered.length) otherEvs[date]=filtered;
               });
+              const newMap={...otherEvs};
               evs.forEach(ev=>{
                 const d=(ev.start.date||ev.start.dateTime||"").slice(0,10);
                 if(!d) return;
@@ -4894,7 +5446,12 @@ function App(){
       gcalClientRef.current=client;
       client.requestAccessToken();
     };
-    if(window.google?.accounts?.oauth2){ s.onload(); } else { document.head.appendChild(s); }
+    // Script ggf. bereits geladen
+    if(window.google?.accounts?.oauth2){
+      s.onload();
+    } else {
+      document.head.appendChild(s);
+    }
   }
   function gcalDisconnect(){
     const token=gcalToken;
@@ -4902,6 +5459,7 @@ function App(){
     gcalClearEventsCache(activePerson);
     gcalClearEventsFromFirebase(activePerson);
     setGcalTokens(prev=>({...prev,[activePerson]:null}));
+    // Events dieser Person aus State entfernen, andere behalten
     setGcalEvents(prev=>{
       const newMap={};
       Object.keys(prev).forEach(date=>{
@@ -4955,6 +5513,8 @@ function App(){
             for(const [k,v] of Object.entries(data)){
               if(k==="entries"){
                 try{ const all=JSON.parse(v); for(const [ek,ev] of Object.entries(all)) lsSet("entry2:"+ek,JSON.stringify(ev)); }catch{}
+              } else if(k==="rentries"){
+                try{ const all=JSON.parse(v); for(const [ek,ev] of Object.entries(all)) lsSet("rentry2:"+ek,JSON.stringify(ev)); }catch{}
               } else { lsSet(k,v); }
             }
             const {lp:np,lw,le,lc}=await loadDynamic();
@@ -5073,6 +5633,22 @@ function App(){
     if(savedRecipes?.value){try{setRecipes(JSON.parse(savedRecipes.value));}catch{}}
     const savedApiKey=await sGet(SK.apiKey);
     if(savedApiKey?.value){setApiKey(savedApiKey.value);}
+    const savedRCats=await sGet(SK.routineCategories);
+    if(savedRCats?.value){try{setRoutineCategories(JSON.parse(savedRCats.value));}catch{}}
+    const savedRAkts=await sGet(SK.routineActivities);
+    if(savedRAkts?.value){try{setRoutineActivities(JSON.parse(savedRAkts.value));}catch{}}
+    const savedRWin=await sGet(SK.routineWindows2);
+    if(savedRWin?.value){try{setRoutineWindows2(JSON.parse(savedRWin.value));}catch{}}
+    const rEntryResult=await sList(SK.routineEntries);
+    if(rEntryResult?.keys?.length){
+      const re={};
+      for(const k of rEntryResult.keys){
+        const ek=k.replace(SK.routineEntries,"");
+        const r=await sGet(k);
+        if(r?.value){ try{ re[ek]=JSON.parse(r.value); }catch{} }
+      }
+      setRoutineEntries(re);
+    }
     const {persons:lp,windowsMap:lw,entries:le,categories:lc,writeTime}=await loadAllFromStorage(Object.keys(DEFAULT_WINDOWS),DEFAULT_WINDOWS);
     lastStorageWriteRef.current=writeTime;
     return {lp,lw,le,lc};
@@ -5206,6 +5782,34 @@ function App(){
     await saveTs();
   }
 
+  // --- Routine 2.0 ---------------------------------------------------------
+  async function handleSaveRoutineCategories(newCats){
+    setRoutineCategories(newCats);
+    await sSet(SK.routineCategories, JSON.stringify(newCats));
+    await saveTs();
+  }
+  async function handleSaveRoutineActivities(newAkts){
+    setRoutineActivities(newAkts);
+    await sSet(SK.routineActivities, JSON.stringify(newAkts));
+    await saveTs();
+  }
+  async function handleSaveRoutineWindows2(newWinMap){
+    setRoutineWindows2(newWinMap);
+    await sSet(SK.routineWindows2, JSON.stringify(newWinMap));
+    await saveTs();
+  }
+  // Aktualisiert den Tageseintrag eines Zeitfensters (Routine 2.0)
+  async function handleSaveRoutineEntry(person,date,windowId,patch){
+    const key = r2EntryKey(person,date);
+    const prevDay = routineEntries[key] || {windows:{}};
+    const prevWin = (prevDay.windows||{})[windowId] || {};
+    const newDay = {...prevDay, windows:{...(prevDay.windows||{}), [windowId]: {...prevWin, ...patch}}};
+    const newAll = {...routineEntries, [key]:newDay};
+    setRoutineEntries(newAll);
+    await sSet(SK.routineEntries+key, JSON.stringify(newDay));
+    await saveTs();
+  }
+
   async function handleSaveTodos(newTodos){
     setTodos(newTodos);
     await sSet(SK.todos, JSON.stringify(newTodos));
@@ -5304,9 +5908,11 @@ function App(){
   function shiftDate(n){const d=new Date(activeDate+"T12:00:00");d.setDate(d.getDate()+n);setActiveDate(d.toISOString().slice(0,10));}
   const swipeTouchStartX=useRef(0);
 
+  // Sync: nur aktive Person; andere Personen-Events bleiben unberührt
   async function gcalRefreshAll(forceRefresh){
     const token=gcalToken||gcalGetToken(activePerson);
     if(!token){ console.warn("GCal: kein Token für",activePerson); return; }
+    // Ohne Force: aus Cache laden falls vorhanden
     if(!forceRefresh){
       const cached=gcalLoadEventsCache(activePerson);
       if(cached){
@@ -5333,6 +5939,7 @@ function App(){
       gcalSaveEventsCache(activePerson,events);
       gcalSaveEventsToFirebase(activePerson,events);
       setGcalEvents(prev=>{
+        // Andere Personen-Events behalten, nur diese Person ersetzen
         const newMap={};
         Object.keys(prev).forEach(date=>{
           const filtered=(prev[date]||[]).filter(ev=>ev._person!==activePerson);
@@ -5435,6 +6042,15 @@ function App(){
                 </button>
               ))}
             </div>
+            {kiBtn}
+          </div>
+        );
+
+        /* ── ROUTINE 2.0 ── */
+        if(viewMode==="routine2") return(
+          <div style={HDR}>
+            <button onClick={()=>setViewMode("dashboard")} style={BTN_BACK}>&#8592; Home</button>
+            <span style={{fontSize:13,fontWeight:700,color:"#111",flex:1}}>Routine</span>
             {kiBtn}
           </div>
         );
@@ -5548,7 +6164,9 @@ function App(){
               if(!tok) return null;
               return(
                 <button key={p} onClick={async()=>{
+                  const prev=activePerson;
                   setActivePerson(p);
+                  // kurz warten damit State gesetzt ist, dann sync
                   setTimeout(()=>gcalRefreshAll(true),50);
                 }}
                 style={{padding:"3px 9px",borderRadius:20,border:"1.5px solid "+col,background:"transparent",color:col,cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",flexShrink:0}}>
@@ -5634,6 +6252,17 @@ function App(){
           onNavigate={setViewMode} onOpenSettings={()=>setShowSettings(true)}
           personProfiles={personProfiles} gcalEvents={gcalEvents} accent={accent}
           appEvents={appEvents} recipes={recipes}
+          routineWindows2={routineWindows2} routineEntries={routineEntries} routineActivities={routineActivities}
+        />
+      )}
+      {viewMode==="routine2"&&(
+        <RoutineNeuView
+          persons={persons} activePerson={activePerson} activeDate={activeDate}
+          routineCategories={routineCategories} routineActivities={routineActivities}
+          routineWindows2={routineWindows2} routineEntries={routineEntries}
+          onSaveCategories={handleSaveRoutineCategories} onSaveActivities={handleSaveRoutineActivities}
+          onSaveWindows={handleSaveRoutineWindows2} onSaveEntry={handleSaveRoutineEntry}
+          accent={accent}
         />
       )}
       {viewMode==="tag"&&(
@@ -5743,8 +6372,7 @@ function App(){
     </div>
   );
 }
-      const root = ReactDOM.createRoot(document.getElementById("root"));
-      root.render(React.createElement(App));
+
     </script>
   </body>
 </html>
