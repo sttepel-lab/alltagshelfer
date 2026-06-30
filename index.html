@@ -4901,6 +4901,26 @@ function r2DecToHHMM(dec){
   if(m===60){m=0;h+=1;}
   return String(h).padStart(2,"0")+":"+String(m).padStart(2,"0");
 }
+function R2TimeAxis(){
+  var hours=[]; for(var h=Math.ceil(DAY_START);h<=DAY_END;h++) hours.push(h);
+  return (
+    <div style={{width:36,flexShrink:0,position:"relative",height:R2_TOTAL_HEIGHT}}>
+      {hours.map(function(h){
+        return <div key={h} style={{position:"absolute",top:r2TimeToY(h)-7,right:3,fontSize:9,color:"#bbb",fontFamily:"monospace"}}>{formatHour(h)}</div>;
+      })}
+    </div>
+  );
+}
+function R2GridLines(){
+  var hours=[]; for(var h=Math.ceil(DAY_START);h<=DAY_END;h++) hours.push(h);
+  return (
+    <div style={{position:"absolute",inset:0,pointerEvents:"none"}}>
+      {hours.map(function(h){
+        return <div key={h} style={{position:"absolute",top:r2TimeToY(h),left:0,right:0,borderTop:"1px solid #ece9e4"}}/>;
+      })}
+    </div>
+  );
+}
 
 function RoutineNeuView(props){
   var persons          = props.persons || [];
@@ -4965,19 +4985,18 @@ function RoutineNeuView(props){
   );
 }
 
-// --- Heute-Tab: Soll/Ist Tagesausführung -------------------------------------
+// --- Heute-Tab: Soll/Ist Tagesausführung (Zwei-Spalten-Zeitstrahl) -----------
 function R2HeuteTab(props){
   var windows = props.windows, dayData = props.dayData, person=props.person, date=props.date;
   var routineActivities=props.routineActivities, getAktForWindow=props.getAktForWindow, durationH=props.durationH;
   var onSaveEntry = props.onSaveEntry, accent=props.accent;
+  var [expandedSoll,setExpandedSoll] = React.useState(null); // windowId, Soll-Block aufgeklappt
   var [verwerfFor,setVerwerfFor] = React.useState(null); // windowId, fuer Popup
   var [editIst,setEditIst] = React.useState(null); // windowId, fuer Bearbeiten-Modal
   var [dragWin,setDragWin] = React.useState(null);
   var dragRef = React.useRef({y0:0, start0:0});
-  var trackRef = React.useRef(null);
 
-  var sollWindows = windows.filter(function(w){ var d=dayData.windows[w.id]; return !d || d.status!=="erledigt"; });
-  var istWindows  = windows.filter(function(w){ var d=dayData.windows[w.id]; return d && d.status==="erledigt"; });
+  var istWindows = windows.filter(function(w){ var d=dayData.windows[w.id]; return d && d.status==="erledigt"; });
 
   var aktivKcalSum = istWindows.reduce(function(sum,w){
     var d=dayData.windows[w.id];
@@ -4995,14 +5014,17 @@ function R2HeuteTab(props){
     var akt = akts.find(function(a){return a.id===chosenId;}) || routineActivities.find(function(a){return a.id===chosenId;});
     var kcal = akt && akt.kcalPerHour ? Math.round(akt.kcalPerHour*durationH(w)) : 0;
     onSaveEntry(person,date,w.id,{status:"erledigt", chosenActivityId:chosenId, istStart:w.sollStart, kcalBurned:kcal});
+    setExpandedSoll(null);
   }
   function setVerwerfGrund(w, grund){
     onSaveEntry(person,date,w.id,{status:grund}); // "termin" | "keinelust"
     setVerwerfFor(null);
+    setExpandedSoll(null);
   }
   function zurueckSetzen(w){
     onSaveEntry(person,date,w.id,{status:"offen", kcalBurned:0});
     setEditIst(null);
+    setExpandedSoll(null);
   }
   function setIstTime(w, hhmm){
     onSaveEntry(person,date,w.id,{istStart:hhmm});
@@ -5010,6 +5032,7 @@ function R2HeuteTab(props){
 
   function onPointerDownIst(e,w){
     e.preventDefault();
+    e.stopPropagation();
     var d = dayData.windows[w.id]||{};
     var startDec = parseTime(d.istStart||w.sollStart) || DAY_START;
     dragRef.current = {y0:e.clientY, start0:startDec};
@@ -5039,87 +5062,131 @@ function R2HeuteTab(props){
         </div>
       )}
 
-      <div style={{fontSize:10,letterSpacing:1.5,color:"#999",textTransform:"uppercase",marginBottom:6}}>Soll</div>
-      {sollWindows.length===0 && <div style={{fontSize:11,color:"#888",marginBottom:14}}>Alles erledigt ✓</div>}
-      {sollWindows.map(function(w){
-        var d = dayData.windows[w.id]||{};
-        var akts = getAktForWindow(w);
-        var status = d.status || "offen";
-        var col = R2_STATUS_COLORS[status] || R2_STATUS_COLORS.offen;
-        var chosenId = d.chosenActivityId || (akts.length===1 ? akts[0].id : null);
-        var chosen = akts.find(function(a){return a.id===chosenId;});
-        return (
-          <div key={w.id} style={{background:col.bg,border:"1px solid "+col.border,borderRadius:12,padding:"9px 11px",marginBottom:8}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:akts.length?5:0}}>
-              <div style={{fontSize:11,fontWeight:700,color:col.text}}>{w.label}</div>
-              <div style={{fontSize:10,color:col.text,opacity:.75}}>{w.sollStart}–{w.sollEnde}</div>
-            </div>
-            {status==="termin" && <div style={{fontSize:11,color:col.text}}>📅 Außerordentlicher Termin</div>}
-            {status==="keinelust" && <div style={{fontSize:11,color:col.text}}>✕ Keine Lust</div>}
-            {status==="offen" && akts.length===0 && <div style={{fontSize:11,color:"#999"}}>Keine Aktivität zugeordnet</div>}
-            {status==="offen" && akts.length>0 && (
-              <div style={{display:"flex",alignItems:"center",gap:6}}>
-                {akts.length>1 ? (
-                  <select value={chosenId||""} onChange={function(e){chooseAkt(w,e.target.value||null);}}
-                    style={{flex:1,fontSize:11,padding:"5px 6px",borderRadius:8,border:"1px solid "+col.border,background:"#fff",color:"#333"}}>
-                    <option value="">– auswählen –</option>
-                    {akts.map(function(a){ return <option key={a.id} value={a.id}>{a.title}</option>; })}
-                  </select>
-                ) : (
-                  <div style={{flex:1,fontSize:12,color:"#333",fontWeight:600}}>{chosen?chosen.title:""}</div>
-                )}
-                <button onClick={function(){abhaken(w);}} disabled={!chosenId}
-                  style={{width:30,height:30,borderRadius:"50%",border:"none",cursor:chosenId?"pointer":"default",
-                    background:chosenId?"#cfe8cf":"#eee",color:chosenId?"#2d5a2d":"#bbb",fontSize:15,flexShrink:0}}>✓</button>
-                <button onClick={function(){setVerwerfFor(w.id);}}
-                  style={{width:30,height:30,borderRadius:"50%",border:"none",cursor:"pointer",
-                    background:"#f2c9c9",color:"#7a2a2a",fontSize:13,flexShrink:0}}>✕</button>
-              </div>
-            )}
-            {verwerfFor===w.id && (
-              <div style={{marginTop:8,display:"flex",gap:6}}>
-                <button onClick={function(){setVerwerfGrund(w,"termin");}}
-                  style={{flex:1,fontSize:10,padding:"6px 4px",borderRadius:8,border:"1px solid #9cc4e0",background:"#c9dff0",color:"#1f4a6e",cursor:"pointer"}}>
-                  Außerordentl. Termin
-                </button>
-                <button onClick={function(){setVerwerfGrund(w,"keinelust");}}
-                  style={{flex:1,fontSize:10,padding:"6px 4px",borderRadius:8,border:"1px solid #e0a0a0",background:"#f2c9c9",color:"#7a2a2a",cursor:"pointer"}}>
-                  Keine Lust
-                </button>
-                <button onClick={function(){setVerwerfFor(null);}}
-                  style={{fontSize:10,padding:"6px 8px",borderRadius:8,border:"1px solid #ddd",background:"#fff",color:"#888",cursor:"pointer"}}>
-                  Abbr.
-                </button>
-              </div>
-            )}
-          </div>
-        );
-      })}
+      <div style={{display:"flex"}}>
+        <R2TimeAxis/>
+        {/* SOLL */}
+        <div style={{flex:1,display:"flex",flexDirection:"column",minWidth:0}}>
+          <div style={{textAlign:"center",padding:"3px 0",fontSize:9,fontWeight:700,color:"#999",letterSpacing:1,background:"#faf9f7",borderLeft:"1px solid #ece9e4",borderBottom:"1px solid #ece9e4",position:"sticky",top:0,zIndex:4}}>SOLL</div>
+          <div style={{flex:1,position:"relative",borderLeft:"1px solid #ece9e4",height:R2_TOTAL_HEIGHT}}>
+            <R2GridLines/>
+            {windows.map(function(w){
+              var s = parseTime(w.sollStart), e = parseTime(w.sollEnde);
+              if(s===null) return null;
+              var startY = r2TimeToY(s);
+              var endY = r2TimeToY(e>s?e:e+24);
+              var height = Math.max(endY-startY, 34);
+              var d = dayData.windows[w.id]||{};
+              var akts = getAktForWindow(w);
+              var status = d.status || "offen";
+              var col = R2_STATUS_COLORS[status] || R2_STATUS_COLORS.offen;
+              var chosenId = d.chosenActivityId || (akts.length===1 ? akts[0].id : null);
+              var chosen = akts.find(function(a){return a.id===chosenId;});
+              var isExpanded = expandedSoll===w.id;
+              return (
+                <div key={w.id}
+                  onClick={function(){ setExpandedSoll(isExpanded?null:w.id); if(verwerfFor && verwerfFor!==w.id) setVerwerfFor(null); }}
+                  style={{position:"absolute",top:startY,left:1,right:1,minHeight:height,background:col.bg,
+                    border:"1px solid "+col.border,borderRadius:6,padding:"3px 6px",boxSizing:"border-box",
+                    overflow:isExpanded?"visible":"hidden",cursor:"pointer",zIndex:isExpanded?5:1}}>
+                  <div style={{fontSize:10,fontWeight:700,color:col.text,whiteSpace:isExpanded?"normal":"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{w.label}</div>
+                  <div style={{fontSize:8,color:col.text,opacity:.75}}>{formatHour(s)}–{formatHour(e>s?e:e+24)}</div>
 
-      <div style={{fontSize:10,letterSpacing:1.5,color:"#999",textTransform:"uppercase",margin:"18px 0 6px"}}>Ist</div>
-      {istWindows.length===0 && <div style={{fontSize:11,color:"#888",marginBottom:14}}>Noch nichts erledigt</div>}
-      <div ref={trackRef} style={{position:"relative",minHeight:Math.max(60,istWindows.length*46),touchAction:"none"}}>
-        {istWindows.slice().sort(function(a,b){
-          var da=dayData.windows[a.id]||{}, db=dayData.windows[b.id]||{};
-          return (parseTime(da.istStart||a.sollStart)||0)-(parseTime(db.istStart||b.sollStart)||0);
-        }).map(function(w){
-          var d = dayData.windows[w.id]||{};
-          var akt = routineActivities.find(function(a){return a.id===d.chosenActivityId;});
-          var col = R2_STATUS_COLORS.erledigt;
-          return (
-            <div key={w.id}
-              onPointerDown={function(e){onPointerDownIst(e,w);}}
-              onDoubleClick={function(){setEditIst(w.id);}}
-              style={{background:col.bg,border:"1px solid "+col.border,borderRadius:10,padding:"7px 10px",
-                marginBottom:6,cursor:"grab",display:"flex",justifyContent:"space-between",alignItems:"center",
-                userSelect:"none",opacity:dragWin===w.id?0.7:1}}>
-              <div style={{fontSize:11,color:col.text,fontWeight:600}}>{akt?akt.title:w.label}</div>
-              <div style={{fontSize:10,color:col.text,opacity:.8}}>{d.istStart||w.sollStart}{d.kcalBurned?" · "+d.kcalBurned+" kcal":""}</div>
-            </div>
-          );
-        })}
+                  {!isExpanded && status==="termin" && <div style={{fontSize:9,color:col.text,marginTop:2}}>📅 Termin</div>}
+                  {!isExpanded && status==="keinelust" && <div style={{fontSize:9,color:col.text,marginTop:2}}>✕ Keine Lust</div>}
+                  {!isExpanded && status==="erledigt" && <div style={{fontSize:9,color:col.text,marginTop:2}}>✓ {chosen?chosen.title:""}</div>}
+
+                  {isExpanded && (
+                    <div onClick={function(e){e.stopPropagation();}} style={{marginTop:5,background:"#fff",border:"1px solid "+col.border,borderRadius:8,padding:7,boxShadow:"0 4px 10px rgba(0,0,0,.12)"}}>
+                      {status==="offen" && akts.length===0 && <div style={{fontSize:11,color:"#999",marginBottom:4}}>Keine Aktivität zugeordnet</div>}
+                      {status==="offen" && akts.length>0 && (
+                        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
+                          {akts.length>1 ? (
+                            <select value={chosenId||""} onChange={function(e){chooseAkt(w,e.target.value||null);}}
+                              style={{flex:1,fontSize:11,padding:"5px 6px",borderRadius:8,border:"1px solid "+col.border,background:"#fff",color:"#333"}}>
+                              <option value="">– auswählen –</option>
+                              {akts.map(function(a){ return <option key={a.id} value={a.id}>{a.title}</option>; })}
+                            </select>
+                          ) : (
+                            <div style={{flex:1,fontSize:12,color:"#333",fontWeight:600}}>{chosen?chosen.title:""}</div>
+                          )}
+                          <button onClick={function(){abhaken(w);}} disabled={!chosenId}
+                            style={{width:28,height:28,borderRadius:"50%",border:"none",cursor:chosenId?"pointer":"default",
+                              background:chosenId?"#cfe8cf":"#eee",color:chosenId?"#2d5a2d":"#bbb",fontSize:14,flexShrink:0}}>✓</button>
+                          <button onClick={function(){setVerwerfFor(w.id);}}
+                            style={{width:28,height:28,borderRadius:"50%",border:"none",cursor:"pointer",
+                              background:"#f2c9c9",color:"#7a2a2a",fontSize:12,flexShrink:0}}>✕</button>
+                        </div>
+                      )}
+                      {status!=="offen" && (
+                        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:6,marginBottom:4}}>
+                          <div style={{fontSize:11,color:col.text}}>
+                            {status==="termin" && "📅 Außerordentlicher Termin"}
+                            {status==="keinelust" && "✕ Keine Lust"}
+                            {status==="erledigt" && ("✓ "+(chosen?chosen.title:"")+(d.istStart?" · "+d.istStart:""))}
+                          </div>
+                          <button onClick={function(){zurueckSetzen(w);}}
+                            style={{fontSize:9,padding:"4px 7px",borderRadius:7,border:"1px solid #ddd",background:"#f5f3ef",color:"#666",cursor:"pointer",flexShrink:0}}>
+                            ↩ Zurück
+                          </button>
+                        </div>
+                      )}
+                      {verwerfFor===w.id && (
+                        <div style={{marginTop:6,display:"flex",gap:6}}>
+                          <button onClick={function(){setVerwerfGrund(w,"termin");}}
+                            style={{flex:1,fontSize:10,padding:"6px 4px",borderRadius:8,border:"1px solid #9cc4e0",background:"#c9dff0",color:"#1f4a6e",cursor:"pointer"}}>
+                            Termin
+                          </button>
+                          <button onClick={function(){setVerwerfGrund(w,"keinelust");}}
+                            style={{flex:1,fontSize:10,padding:"6px 4px",borderRadius:8,border:"1px solid #e0a0a0",background:"#f2c9c9",color:"#7a2a2a",cursor:"pointer"}}>
+                            Keine Lust
+                          </button>
+                          <button onClick={function(){setVerwerfFor(null);}}
+                            style={{fontSize:10,padding:"6px 8px",borderRadius:8,border:"1px solid #ddd",background:"#fff",color:"#888",cursor:"pointer"}}>
+                            Abbr.
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* IST */}
+        <div style={{flex:1,display:"flex",flexDirection:"column",minWidth:0}}>
+          <div style={{textAlign:"center",padding:"3px 0",fontSize:9,fontWeight:700,color:"#2d5a2d",letterSpacing:1,background:"#f0f7f0",borderLeft:"1px solid #ece9e4",borderBottom:"1px solid #ece9e4",position:"sticky",top:0,zIndex:4}}>IST</div>
+          <div style={{flex:1,position:"relative",borderLeft:"1px dashed #ddd",height:R2_TOTAL_HEIGHT,touchAction:"none"}}>
+            <R2GridLines/>
+            {istWindows.length===0 && (
+              <div style={{position:"absolute",top:r2TimeToY(9),left:2,right:2,textAlign:"center",fontSize:9,color:"#ccc",fontStyle:"italic"}}>
+                Noch nichts erledigt
+              </div>
+            )}
+            {istWindows.map(function(w){
+              var d = dayData.windows[w.id]||{};
+              var akt = routineActivities.find(function(a){return a.id===d.chosenActivityId;});
+              var col = R2_STATUS_COLORS.erledigt;
+              var istDec = parseTime(d.istStart||w.sollStart) || DAY_START;
+              var startY = r2TimeToY(istDec);
+              var height = Math.max(durationH(w)*R2_PX_PER_HOUR, 30);
+              return (
+                <div key={w.id}
+                  onPointerDown={function(e){onPointerDownIst(e,w);}}
+                  onDoubleClick={function(){setEditIst(w.id);}}
+                  style={{position:"absolute",top:startY,left:1,right:1,minHeight:height,background:col.bg,
+                    border:"1px solid "+col.border,borderRadius:6,padding:"3px 6px",boxSizing:"border-box",
+                    cursor:"grab",userSelect:"none",opacity:dragWin===w.id?0.7:1,overflow:"hidden"}}>
+                  <div style={{fontSize:10,fontWeight:700,color:col.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{akt?akt.title:w.label}</div>
+                  <div style={{fontSize:8,color:col.text,opacity:.8}}>{d.istStart||w.sollStart}{d.kcalBurned?" · "+d.kcalBurned+" kcal":""}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
-      <div style={{fontSize:9,color:"#aaa",marginTop:4}}>↕ Ziehen zum Verschieben · Doppelklick zum Bearbeiten</div>
+      <div style={{fontSize:9,color:"#aaa",marginTop:6}}>Soll-Fenster antippen zum Abhaken/Verwerfen · Ist: ↕ Ziehen zum Verschieben · Doppelklick zum Bearbeiten</div>
 
       {editIst && (function(){
         var w = windows.find(function(ww){return ww.id===editIst;});
