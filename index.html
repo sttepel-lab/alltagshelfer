@@ -294,7 +294,7 @@ async function fbSaveAll(changedKey, changedValue){
     const doc = {};
     const flatKeys = [
       "cfg:persons3","cfg:windows3","cfg:categories1","cfg:appEvents1",
-      "cfg:shoppingList1","cfg:todos1","cfg:favorites1","cfg:nutrition1",
+      "cfg:shoppingList1","cfg:todos1","cfg:favorites1","cfg:nutrition1","cfg:nutritionFavorites1",
       "cfg:personProfiles1","cfg:recipes1","cfg:apiKey1","cfg:lastWriteTime1","cfg:personColors1","cfg:wishlist1",
       "cfg:routineCategories1","cfg:routineActivities1","cfg:routineWindows2"
     ];
@@ -407,10 +407,14 @@ const SK = {
   todos:         "cfg:todos1",
   favorites:     "cfg:favorites1",
   nutrition:     "cfg:nutrition1",
+  nutritionFavorites: "cfg:nutritionFavorites1",
   personProfiles:"cfg:personProfiles1",
   personColors:  "cfg:personColors1",
   wishlist:      "cfg:wishlist1",
   recipes:       "cfg:recipes1",
+  ingredients:   "cfg:ingredients1",
+  fertiggerichte:"cfg:fertiggerichte1",
+  getraenke:     "cfg:getraenke1",
   apiKey:        "cfg:apiKey1",
   lastWriteTime: "cfg:lastWriteTime1",
   routineCategories: "cfg:routineCategories1",
@@ -2750,20 +2754,32 @@ function computeBMRBase(profile){
 function computeKcalTarget(profile,faktor=1.55){
   const bmr=computeBMRRaw(profile); return bmr?Math.round(bmr*faktor):null;
 }
-function computeWaterTarget(profile){
+function computeWaterTarget(profile,activeKcal){
   if(!profile?.gewicht) return null;
-  return Math.min(5000,Math.max(1500,Math.round(profile.gewicht*35/100)*100));
+  const base=Math.min(5000,Math.max(1500,Math.round(profile.gewicht*35/100)*100));
+  const activeMl=Math.round((activeKcal||0)*1.25); // +1,25ml Wasserbedarf je aktiver Kalorie
+  return base+activeMl;
 }
 // Berechnet alle Makro-Ziele basierend auf Ziel (aufbau/halten/abbau) und TDEE
-function computeMacroTargets(profile, tdee){
-  const ziel=ERNAEHRUNGS_ZIELE.find(z=>z.id===(profile?.ernaehrungsziel||"halten"))||ERNAEHRUNGS_ZIELE[1];
+// activeKcal fließt zusätzlich ins Wasserziel ein (1,25ml/kcal, in jedem Kalorienmodus)
+function computeMacroTargets(profile, tdee, activeKcal){
+  const zielId=profile?.ernaehrungsziel||"halten";
+  const ziel=ERNAEHRUNGS_ZIELE.find(z=>z.id===zielId)||ERNAEHRUNGS_ZIELE[1];
   const weight=profile?.gewicht||70;
   const kcal=Math.max(1200, Math.round(tdee+ziel.delta));
   const protein=Math.round(weight*ziel.proteinPerKg);
   const fett=Math.round((kcal*0.25)/9);
   const carbs=Math.max(50,Math.round((kcal-protein*4-fett*9)/4));
-  const water=computeWaterTarget(profile)||Math.round(weight*35/100)*100;
-  return {kcal,protein,fett,carbs,water};
+  const water=computeWaterTarget(profile,activeKcal)||Math.round(weight*35/100)*100;
+  // Zusatz-Nährstoffe, zielabhängig gestaffelt (WHO/DGE-Richtwerte als Basis):
+  const zuckerPct = zielId==="abbau" ? 0.05 : 0.10;          // WHO: <10% Kcal, im Defizit strenger
+  const gesFettPct = 0.10;                                    // WHO/DGE-Obergrenze, zielunabhängig fix
+  const ballaststoffeProKcal = zielId==="abbau" ? 16 : 14;    // g je 1000 kcal, im Defizit erhöht (Sättigung)
+  const zucker = Math.round((kcal*zuckerPct)/4);
+  const gesFett = Math.round((kcal*gesFettPct)/9);
+  const ungesFett = Math.max(0, fett-gesFett);
+  const ballaststoffe = Math.round((kcal/1000)*ballaststoffeProKcal);
+  return {kcal,protein,fett,carbs,water,zucker,gesFett,ungesFett,ballaststoffe};
 }
 // ── GOOGLE CALENDAR OAuth2 Helpers ──────────────────────────────────────────
 // Alle Funktionen person-spezifisch – jede Person hat eigenen Token + Cache
@@ -2912,8 +2928,8 @@ function NutritionTube({ value, total, type, label, unit }) {
       <div style={{fontSize:9,color:"#666",marginBottom:5,letterSpacing:1.5,textTransform:"uppercase",fontWeight:700}}>{label}</div>
       <svg width={W} height={TH} viewBox={`0 0 ${W} ${TH}`}
         style={{filter: isWater
-          ? "drop-shadow(0 0 12px rgba(76,201,240,0.5)) drop-shadow(0 0 24px rgba(76,201,240,0.2))"
-          : "drop-shadow(0 0 14px rgba(255,80,0,0.6)) drop-shadow(0 0 28px rgba(200,20,0,0.3))"}}>
+          ? "drop-shadow(0 2px 6px rgba(26,111,168,0.28)) drop-shadow(0 0 14px rgba(76,201,240,0.18))"
+          : "drop-shadow(0 2px 6px rgba(193,68,14,0.28)) drop-shadow(0 0 14px rgba(255,120,40,0.18))"}}>
         <defs>
           <clipPath id={clipId}>
             <path d={tubeD}/>
@@ -3003,21 +3019,41 @@ function NutritionTube({ value, total, type, label, unit }) {
             fill="rgba(255,255,255,0.9)" fontFamily="Georgia,serif">{pct}%</text>
         ) : (
           <text x={W/2} y={fillY - 6} textAnchor="middle" fontSize="11" fontWeight="bold"
-            fill={isWater?"#7ee8fa":"#ff7b00"} fontFamily="Georgia,serif">{pct}%</text>
+            fill={isWater?"#1a6fa8":"#c1440e"} fontFamily="Georgia,serif">{pct}%</text>
         )}
       </svg>
 
       {/* Numeric value below tube */}
       <div style={{textAlign:"center",marginTop:6}}>
-        <span style={{fontSize:15,fontWeight:700,color:"#e0e0e0"}}>{value}</span>
-        <span style={{fontSize:9,color:"#444",marginLeft:3}}>{unit}</span>
+        <span style={{fontSize:15,fontWeight:700,color:"#2c3a22"}}>{value}</span>
+        <span style={{fontSize:9,color:"#5a6b4f",marginLeft:3}}>{unit}</span>
       </div>
-      <div style={{fontSize:8,color:"#333",marginTop:1}}>Ziel: {total} {unit}</div>
+      <div style={{fontSize:8,color:"#5a6b4f",marginTop:1}}>Ziel: {total} {unit}</div>
     </div>
   );
 }
 
-function NutritionView({ nutritionData, activePerson, activeDate, accent, persons, onSave, onDateChange, entries, personProfiles, recipes, externalTab, onMarkRecipeEaten, routineWindows2, routineEntries }) {
+// --- NÄHRSTOFF-BALKEN (vertikal, Soll/Ist) für Kohlenhydrate/Zucker/Eiweiß/Ballaststoffe/Fett/unges.Fett ---
+function NutrientBar({ value, total, label, unit, color }) {
+  const t = total>0 ? total : 1;
+  const pct = Math.min(100, Math.round((value/t)*100));
+  const H = 84, W = 20;
+  const fillH = Math.max(0,(pct/100)*H);
+  return (
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",width:46,flexShrink:0}}>
+      <div style={{fontSize:7,color:"#5a6b4f",marginBottom:3,textAlign:"center",lineHeight:1.25,minHeight:16,fontWeight:700,textTransform:"uppercase",letterSpacing:0.3}}>{label}</div>
+      <svg width={W} height={H+4} viewBox={`0 0 ${W} ${H+4}`}>
+        <rect x="1" y="1" width={W-2} height={H} rx={(W-2)/2} fill="rgba(0,0,0,0.07)" stroke="rgba(0,0,0,0.12)" strokeWidth="1"/>
+        <rect x="1" y={H+1-fillH} width={W-2} height={fillH} rx={(W-2)/2} fill={color} style={{transition:"height .4s"}}/>
+        {pct>=100&&<circle cx={W/2} cy={8} r="3" fill="#fff" opacity="0.9"/>}
+      </svg>
+      <div style={{fontSize:9,fontWeight:700,color:"#2c3a22",marginTop:3}}>{value}<span style={{fontSize:7,fontWeight:400,color:"#5a6b4f"}}>{unit}</span></div>
+      <div style={{fontSize:7,color:"#5a6b4f"}}>Ziel {total}{unit}</div>
+    </div>
+  );
+}
+
+function NutritionView({ nutritionData, activePerson, activeDate, accent, persons, onSave, onDateChange, entries, personProfiles, recipes, externalTab, onMarkRecipeEaten, routineWindows2, routineEntries, nutritionFavorites, onSaveNutritionFavorites, getraenke, ingredients, fertiggerichte }) {
   const [tabInternal, setTabInternal] = useState("heute");
   const tab = externalTab||tabInternal;
   const setTab = setTabInternal;
@@ -3059,21 +3095,33 @@ function NutritionView({ nutritionData, activePerson, activeDate, accent, person
   const kcalTarget = aktivModus==="multiplikator"
     ? (computeKcalTarget(profile, aktivFaktor) || T.kcal)
     : (bmrBase ? bmrBase + totalActiveKcal : T.kcal);
-  const waterTarget = computeWaterTarget(profile) || T.water;
+  const waterTarget = computeWaterTarget(profile, totalActiveKcal) || T.water;
   // Makroziele: aus Ernährungsziel + TDEE berechnen
   const tdeeBase = aktivModus==="multiplikator"
     ? (computeKcalTarget(profile, aktivFaktor) || T.kcal)
     : (bmrBase || T.kcal); // stabile Basis ohne tagesaktuelle Aktivitäten
-  const macros = computeMacroTargets(profile, tdeeBase);
+  const macros = computeMacroTargets(profile, tdeeBase, totalActiveKcal);
   // Kcal-Ziel: Makro-Kcal (inkl. Ziel-Delta) + tagesaktuelle Aktiv-Kcal im Aktivitäten-Modus
   const kcalGoal = aktivModus==="aktivitaeten"
     ? Math.max(1200, macros.kcal - tdeeBase + kcalTarget) // Ziel-Offset + heutige Aktivität
     : macros.kcal;
-  const TARGETS = { kcal: kcalGoal, water: macros.water, protein: macros.protein, carbs: macros.carbs, fett: macros.fett };
+  const TARGETS = { kcal: kcalGoal, water: macros.water, protein: macros.protein, carbs: macros.carbs, fett: macros.fett,
+    zucker: macros.zucker, ballaststoffe: macros.ballaststoffe, gesFett: macros.gesFett, ungesFett: macros.ungesFett };
 
+  const [selectedDrinkId,setSelectedDrinkId]=useState("wasser");
+  const drinkOptions=[{id:"wasser",name:"Wasser",kcal:0,protein:0,carbs:0,fett:0},...(getraenke||[])];
+  const selectedDrink=drinkOptions.find(d=>d.id===selectedDrinkId)||drinkOptions[0];
   async function addWater(ml){
     const newData = { ...dayData, wasser: (dayData.wasser||0)+ml };
-    await onSave(key, newData);
+    let finalData = newData;
+    if(selectedDrink.id!=="wasser"&&(selectedDrink.kcal||0)>0){
+      const f=ml/100;
+      const m={id:uid(), zeit:"", name:selectedDrink.name, kcal:Math.round((selectedDrink.kcal||0)*f),
+        protein:Math.round((selectedDrink.protein||0)*f*10)/10, carbs:Math.round((selectedDrink.carbs||0)*f*10)/10,
+        fett:Math.round((selectedDrink.fett||0)*f*10)/10, addedAt:new Date().toISOString()};
+      finalData = {...newData, mahlzeiten:[...(newData.mahlzeiten||[]), m]};
+    }
+    await onSave(key, finalData);
   }
   async function removeWater(ml){
     const newData = { ...dayData, wasser: Math.max(0,(dayData.wasser||0)-ml) };
@@ -3099,6 +3147,30 @@ function NutritionView({ nutritionData, activePerson, activeDate, accent, person
   async function deleteMeal(id){
     const newData = { ...dayData, mahlzeiten:(dayData.mahlzeiten||[]).filter(m=>m.id!==id) };
     await onSave(key, newData);
+  }
+
+  // --- Favoriten (Schnellabruf, max. 5 pro Person) ---
+  const favList = (nutritionFavorites||{})[activePerson] || [];
+  const [showAddFav,setShowAddFav] = useState(false);
+  const [newFav,setNewFav] = useState({name:"",kcal:"",protein:"",carbs:"",fett:""});
+  async function useFavorite(f){
+    const m = { id:uid(), zeit:new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"}),
+      name:f.name, kcal:f.kcal||0, protein:f.protein||0, carbs:f.carbs||0, fett:f.fett||0, addedAt:new Date().toISOString() };
+    const newData = { ...dayData, mahlzeiten:[...(dayData.mahlzeiten||[]), m] };
+    await onSave(key, newData);
+  }
+  async function addFavorite(){
+    if(!newFav.name.trim()||favList.length>=5) return;
+    const f = { id:uid(), name:newFav.name.trim(), kcal:parseInt(newFav.kcal)||0,
+      protein:parseFloat(newFav.protein)||0, carbs:parseFloat(newFav.carbs)||0, fett:parseFloat(newFav.fett)||0 };
+    const newMap = { ...(nutritionFavorites||{}), [activePerson]:[...favList, f] };
+    await onSaveNutritionFavorites(newMap);
+    setNewFav({name:"",kcal:"",protein:"",carbs:"",fett:""});
+    setShowAddFav(false);
+  }
+  async function deleteFavorite(id){
+    const newMap = { ...(nutritionFavorites||{}), [activePerson]: favList.filter(f=>f.id!==id) };
+    await onSaveNutritionFavorites(newMap);
   }
 
   const [showAddActivity,setShowAddActivity] = useState(false);
@@ -3132,7 +3204,7 @@ function NutritionView({ nutritionData, activePerson, activeDate, accent, person
   const weekDays = Array.from({length:7},(_,i)=>addDays(activeDate,-6+i));
 
   return(
-    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:"#0a0a0f",position:"relative"}}>
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:"#eef6e2",position:"relative"}}>
       <ViewBgSvg view="ernaehrung"/>
       {/* CSS Animations */}
       <style>{`
@@ -3166,38 +3238,47 @@ function NutritionView({ nutritionData, activePerson, activeDate, accent, person
                   }
                 </div>
               )}
-              {/* Makros directly under calorie tube */}
-              <div style={{width:"100%",marginTop:10,padding:"8px 10px",background:"#111",borderRadius:8,border:"1px solid #1e1e1e"}}>
-                <div style={{fontSize:8,color:"#444",marginBottom:7,textTransform:"uppercase",letterSpacing:1.5}}>Makros</div>
-                {[{l:"Protein",v:totalProtein,t:TARGETS.protein,c:"#9b72cf"},{l:"Carbs",v:totalCarbs,t:TARGETS.carbs,c:"#c8a200"},{l:"Fett",v:totalFett,t:TARGETS.fett,c:"#ff6b35"}].map(m=>(
-                  <div key={m.l} style={{marginBottom:6}}>
-                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}>
-                      <span style={{fontSize:9,color:m.c,fontWeight:600}}>{m.l}</span>
-                      <span style={{fontSize:9,color:"#333"}}>{m.v}<span style={{color:"#2a2a2a"}}>/{m.t}g</span></span>
-                    </div>
-                    <div style={{height:4,background:"#1a1a1a",borderRadius:2,overflow:"hidden"}}>
-                      <div style={{height:"100%",width:Math.min(100,Math.round((m.v/m.t)*100))+"%",background:m.c,borderRadius:2,transition:"width .4s"}}/>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              {/* Mahlzeiten */}
-              <div style={{width:"100%",marginTop:8,padding:"8px 10px",background:"#111",borderRadius:8,border:"1px solid #1e1e1e"}}>
+              {/* Mahlzeiten (inkl. Favoriten-Schnellabruf) */}
+              <div style={{width:"100%",marginTop:10,padding:"8px 10px",background:"rgba(255,255,255,0.62)",borderRadius:8,border:"1px solid rgba(0,0,0,0.10)"}}>
                 <div style={{display:"flex",alignItems:"center",marginBottom:6}}>
                   <span style={{fontSize:9,color:"#ff6b35",textTransform:"uppercase",letterSpacing:1,fontWeight:700,flex:1}}>🍽 Mahlzeiten</span>
                   <button onClick={()=>setShowAddMeal(!showAddMeal)} style={{width:20,height:20,borderRadius:"50%",border:"none",background:"#ff6b35",color:"#fff",cursor:"pointer",fontSize:13,lineHeight:"20px",padding:0,display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
                 </div>
+                {/* Favoriten-Schnellabruf (bis zu 5, ein Klick trägt die Mahlzeit direkt ein) */}
+                <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:8}}>
+                  {favList.map(f=>(
+                    <div key={f.id} style={{display:"flex",alignItems:"center",gap:1,padding:"3px 3px 3px 9px",borderRadius:20,border:"1px solid #ffbf9c",background:"#fff3ec"}}>
+                      <button onClick={()=>useFavorite(f)} title={f.kcal+" kcal"} style={{border:"none",background:"transparent",cursor:"pointer",fontSize:9,fontFamily:"Georgia,serif",fontWeight:700,color:"#c1440e",padding:0}}>⭐ {f.name}</button>
+                      <button onClick={()=>deleteFavorite(f.id)} style={{border:"none",background:"transparent",cursor:"pointer",fontSize:9,color:"#c1440e",opacity:0.5,padding:"0 3px"}}>✕</button>
+                    </div>
+                  ))}
+                  {favList.length<5&&(
+                    <button onClick={()=>setShowAddFav(v=>!v)} style={{padding:"4px 9px",borderRadius:20,border:"1px dashed rgba(0,0,0,0.22)",background:"transparent",color:"#5a6b4f",cursor:"pointer",fontSize:9,fontFamily:"Georgia,serif"}}>+ Favorit</button>
+                  )}
+                </div>
+                {showAddFav&&(
+                  <div style={{background:"#e6efd9",borderRadius:6,padding:"8px",marginBottom:8,border:"1px solid rgba(0,0,0,0.10)"}}>
+                    <input value={newFav.name} onChange={e=>setNewFav(n=>({...n,name:e.target.value}))} placeholder="Name (z.B. Müsli)" style={{...INP,width:"100%",marginBottom:4,boxSizing:"border-box"}}/>
+                    <div style={{display:"flex",gap:3,marginBottom:5}}>
+                      {[["kcal","kcal","#ff6b35"],["protein","Pg","#9b72cf"],["carbs","Cg","#c8a200"],["fett","Fg","#ff6b35"]].map(([k,ph,c])=>(
+                        <input key={k} type="number" value={newFav[k]} onChange={e=>setNewFav(n=>({...n,[k]:e.target.value}))} placeholder={ph} style={{...INP,width:"100%",flex:1,borderColor:c+"55"}}/>
+                      ))}
+                    </div>
+                    <div style={{display:"flex",gap:4}}>
+                      <button onClick={addFavorite} style={{flex:1,padding:"4px",borderRadius:10,border:"none",background:"#ff6b35",color:"#fff",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif"}}>Speichern</button>
+                      <button onClick={()=>setShowAddFav(false)} style={{padding:"4px 8px",borderRadius:10,border:"1px solid rgba(0,0,0,0.10)",background:"transparent",cursor:"pointer",fontSize:10,color:"#444"}}>✕</button>
+                    </div>
+                  </div>
+                )}
                 {showAddMeal&&(
-                  <div style={{background:"#0d0d0d",borderRadius:6,padding:"8px",marginBottom:8,border:"1px solid #2a2a2a"}}>
-                    {/* Tab: Manuell / Aus Rezept */}
-                    {(recipes||[]).length>0&&(
-                      <div style={{display:"flex",gap:0,marginBottom:8,background:"#1a1a1a",borderRadius:6,overflow:"hidden"}}>
-                        {[["manuell","Manuell"],["rezept","Aus Rezept"]].map(([v,l])=>(
-                          <button key={v} onClick={()=>setMealTab(v)} style={{flex:1,padding:"4px 0",border:"none",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:10,background:mealTab===v?"#ff6b35":"transparent",color:mealTab===v?"#fff":"#555",fontWeight:mealTab===v?700:400}}>{l}</button>
-                        ))}
-                      </div>
-                    )}
-                    {mealTab==="rezept"&&(recipes||[]).length>0?(
+                  <div style={{background:"#e6efd9",borderRadius:6,padding:"8px",marginBottom:8,border:"1px solid #2a2a2a"}}>
+                    {/* Tab: Manuell / Aus Rezept / Zutat / Fertiggericht */}
+                    <div style={{display:"flex",gap:0,marginBottom:8,background:"rgba(0,0,0,0.08)",borderRadius:6,overflow:"hidden",flexWrap:"wrap"}}>
+                      {[["manuell","Manuell"],["rezept","Gericht"],["zutat","Zutat"],["fertiggericht","Fertiggericht"]].map(([v,l])=>(
+                        <button key={v} onClick={()=>setMealTab(v)} style={{flex:"1 1 25%",padding:"4px 0",border:"none",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:10,background:mealTab===v?"#ff6b35":"transparent",color:mealTab===v?"#fff":"#555",fontWeight:mealTab===v?700:400}}>{l}</button>
+                      ))}
+                    </div>
+                    {mealTab==="rezept"?(
                       <RecipeQuickSelect recipes={recipes} onSelect={async(r,portionen)=>{
                         const m={id:uid(),zeit:new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"}),
                           name:r.title+(portionen!==1?" (×"+portionen+")":""),
@@ -3210,6 +3291,22 @@ function NutritionView({ nutritionData, activePerson, activeDate, accent, person
                         const newData={...dayData,mahlzeiten:[...(dayData.mahlzeiten||[]),m]};
                         await onSave(key,newData);
                         if(onMarkRecipeEaten) onMarkRecipeEaten(r.id, activeDate);
+                        setShowAddMeal(false); setMealTab("manuell");
+                      }}/>
+                    ):mealTab==="zutat"?(
+                      <ComponentQuickSelect items={ingredients} defaultRef={100} onSelect={async(it,g,macros)=>{
+                        const m={id:uid(),zeit:new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"}),
+                          name:it.name+" ("+g+"g)", kcal:macros.kcal,protein:macros.protein,carbs:macros.carbs,fett:macros.fett,
+                          addedAt:new Date().toISOString()};
+                        await onSave(key,{...dayData,mahlzeiten:[...(dayData.mahlzeiten||[]),m]});
+                        setShowAddMeal(false); setMealTab("manuell");
+                      }}/>
+                    ):mealTab==="fertiggericht"?(
+                      <ComponentQuickSelect items={fertiggerichte} onSelect={async(it,g,macros)=>{
+                        const m={id:uid(),zeit:new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"}),
+                          name:it.name+" ("+g+"g)", kcal:macros.kcal,protein:macros.protein,carbs:macros.carbs,fett:macros.fett,
+                          addedAt:new Date().toISOString()};
+                        await onSave(key,{...dayData,mahlzeiten:[...(dayData.mahlzeiten||[]),m]});
                         setShowAddMeal(false); setMealTab("manuell");
                       }}/>
                     ):(
@@ -3235,9 +3332,9 @@ function NutritionView({ nutritionData, activePerson, activeDate, accent, person
                 {(dayData.mahlzeiten||[]).length===0
                   ? <div style={{fontSize:9,color:"#2a2a2a",fontStyle:"italic",textAlign:"center",padding:"5px 0"}}>Noch leer</div>
                   : [...(dayData.mahlzeiten||[])].sort((a,b)=>(a.zeit||"99").localeCompare(b.zeit||"99")).map(m=>(
-                    <div key={m.id} style={{display:"flex",alignItems:"center",gap:4,padding:"4px 0",borderBottom:"1px solid #161616"}}>
+                    <div key={m.id} style={{display:"flex",alignItems:"center",gap:4,padding:"4px 0",borderBottom:"1px solid rgba(0,0,0,0.08)"}}>
                       {m.zeit&&<span style={{fontSize:8,color:"#333",minWidth:24}}>{m.zeit}</span>}
-                      <span style={{fontSize:10,color:"#aaa",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.name}</span>
+                      <span style={{fontSize:10,color:"#3d4a34",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.name}</span>
                       <span style={{fontSize:9,color:"#ff6b35",fontWeight:700,flexShrink:0}}>{m.kcal}</span>
                       <button onClick={()=>deleteMeal(m.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#2a2a2a",fontSize:11,padding:"0 2px",flexShrink:0}}>✕</button>
                     </div>
@@ -3250,24 +3347,45 @@ function NutritionView({ nutritionData, activePerson, activeDate, accent, person
             <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",maxWidth:180}}>
               <NutritionTube value={totalWasser} total={TARGETS.water} type="water" label="Wasser" unit="ml"/>
               {/* Water buttons directly under water tube */}
-              <div style={{width:"100%",marginTop:10,padding:"8px 10px",background:"#111",borderRadius:8,border:"1px solid #1e1e1e"}}>
+              <div style={{width:"100%",marginTop:10,padding:"8px 10px",background:"rgba(255,255,255,0.62)",borderRadius:8,border:"1px solid rgba(0,0,0,0.10)"}}>
                 <div style={{fontSize:8,color:"#1a6fa8",marginBottom:7,textTransform:"uppercase",letterSpacing:1.5,fontWeight:700}}>💧 Hinzufügen</div>
+                <select value={selectedDrinkId} onChange={e=>setSelectedDrinkId(e.target.value)}
+                  style={{width:"100%",boxSizing:"border-box",fontSize:10,border:"1px solid #1a6fa855",borderRadius:6,padding:"4px 6px",fontFamily:"Georgia,serif",outline:"none",background:"#fff",color:"#333",marginBottom:6}}>
+                  {drinkOptions.map(d=><option key={d.id} value={d.id}>{d.name}{d.id!=="wasser"&&d.kcal>0?` (${d.kcal} kcal/100ml)`:""}</option>)}
+                </select>
                 <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:5}}>
                   {[200,250,330,500].map(ml=>(
-                    <button key={ml} onClick={()=>addWater(ml)} style={{flex:"1 1 40%",padding:"6px 0",borderRadius:20,border:"1px solid #1a6fa8",background:"#010c14",color:"#4cc9f0",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",fontWeight:600}}>+{ml}</button>
+                    <button key={ml} onClick={()=>addWater(ml)} style={{flex:"1 1 40%",padding:"6px 0",borderRadius:20,border:"1px solid #1a6fa8",background:"#eaf7fd",color:"#4cc9f0",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",fontWeight:600}}>+{ml}</button>
                   ))}
                 </div>
                 <div style={{display:"flex",gap:5}}>
-                  <button onClick={()=>addWater(1000)} style={{flex:1,padding:"6px",borderRadius:20,border:"1px solid #2471a3",background:"#010c14",color:"#7ee8fa",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",fontWeight:700}}>+1 L</button>
-                  {totalWasser>0&&<button onClick={()=>removeWater(250)} style={{padding:"6px 8px",borderRadius:20,border:"1px solid #1e1e1e",background:"transparent",color:"#333",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif"}}>−250</button>}
+                  <button onClick={()=>addWater(1000)} style={{flex:1,padding:"6px",borderRadius:20,border:"1px solid #2471a3",background:"#eaf7fd",color:"#7ee8fa",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",fontWeight:700}}>+1 L</button>
+                  {totalWasser>0&&<button onClick={()=>removeWater(250)} style={{padding:"6px 8px",borderRadius:20,border:"1px solid rgba(0,0,0,0.10)",background:"transparent",color:"#333",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif"}}>−250</button>}
                 </div>
               </div>
             </div>
 
           </div>{/* end tubes row */}
+
+          {/* NÄHRSTOFF-BALKEN */}
+          <div style={{marginTop:8,padding:"8px 10px",background:"rgba(255,255,255,0.62)",borderRadius:8,border:"1px solid rgba(0,0,0,0.10)"}}>
+            <div style={{fontSize:8,color:"#5a6b4f",marginBottom:8,textTransform:"uppercase",letterSpacing:1.5,fontWeight:700}}>🌾 Nährstoffe</div>
+            <div style={{display:"flex",gap:8,justifyContent:"space-between",overflowX:"auto",paddingBottom:2}}>
+              <NutrientBar label="Kohlen&shy;hydrate" value={totalCarbs} total={TARGETS.carbs} unit="g" color="#c8a200"/>
+              <NutrientBar label="davon Zucker" value={0} total={TARGETS.zucker} unit="g" color="#e0c250"/>
+              <NutrientBar label="Eiweiß" value={totalProtein} total={TARGETS.protein} unit="g" color="#9b72cf"/>
+              <NutrientBar label="Ballast&shy;stoffe" value={0} total={TARGETS.ballaststoffe} unit="g" color="#7fae4a"/>
+              <NutrientBar label="Fett" value={totalFett} total={TARGETS.fett} unit="g" color="#ff6b35"/>
+              <NutrientBar label="davon unges." value={0} total={TARGETS.ungesFett} unit="g" color="#ffa36c"/>
+            </div>
+            <div style={{fontSize:7,color:"#8a9a7f",marginTop:6,fontStyle:"italic",textAlign:"center"}}>
+              Zucker, Ballaststoffe &amp; ungesättigte Fette: Ist-Erfassung folgt mit der Lebensmittel-Datenbank
+            </div>
+          </div>
+
           {/* AKTIVITÄTEN KARTE - nur im Aktivitäten-Modus */}
           {aktivModus==="aktivitaeten"&&(
-          <div style={{marginTop:8,padding:"8px 10px",background:"#111",borderRadius:8,border:"1px solid #1e1e1e"}}>
+          <div style={{marginTop:8,padding:"8px 10px",background:"rgba(255,255,255,0.62)",borderRadius:8,border:"1px solid rgba(0,0,0,0.10)"}}>
             <div style={{display:"flex",alignItems:"center",marginBottom:8}}>
               <span style={{fontSize:9,color:"#6fcf97",textTransform:"uppercase",letterSpacing:1,fontWeight:700,flex:1}}>🏃 Aktive Kalorien</span>
               {totalActiveKcal>0&&<span style={{fontSize:11,color:"#6fcf97",fontWeight:700}}>{totalActiveKcal} kcal</span>}
@@ -3278,28 +3396,11 @@ function NutritionView({ nutritionData, activePerson, activeDate, accent, person
                 {routineAkt.length>0&&<span style={{color:"#3a5a3a",fontWeight:700}}>{totalRoutineKcal} kcal</span>}
               </div>
               {routineAkt.length===0
-                ? <div style={{fontSize:9,color:"#1e1e1e",fontStyle:"italic",padding:"2px 0"}}>Noch keine Zeitfenster abgehakt</div>
+                ? <div style={{fontSize:9,color:"rgba(0,0,0,0.10)",fontStyle:"italic",padding:"2px 0"}}>Noch keine Zeitfenster abgehakt</div>
                 : routineAkt.map(a=>(
-                  <div key={a.id} style={{display:"flex",alignItems:"center",gap:4,padding:"3px 0",borderBottom:"1px solid #161616"}}>
+                  <div key={a.id} style={{display:"flex",alignItems:"center",gap:4,padding:"3px 0",borderBottom:"1px solid rgba(0,0,0,0.08)"}}>
                     <span style={{fontSize:9,color:"#3a3a3a",minWidth:32,flexShrink:0}}>{a.start}</span>
                     <span style={{fontSize:10,color:"#666",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.name}</span>
-                    <span style={{fontSize:9,color:"#6fcf97",fontWeight:700,flexShrink:0}}>{a.kcal}</span>
-                  </div>
-                ))
-              }
-            </div>
-            <div style={{marginBottom:8}}>
-              <div style={{fontSize:8,color:"#2a2a2a",textTransform:"uppercase",letterSpacing:1,marginBottom:4,display:"flex",alignItems:"center",gap:4}}>
-                <span>📅 Aus Tagesplan</span>
-                {autoAkt.length>0&&<span style={{color:"#3a5a3a",fontWeight:700}}>{totalAutoKcal} kcal</span>}
-              </div>
-              {autoAkt.length===0
-                ? <div style={{fontSize:9,color:"#1e1e1e",fontStyle:"italic",padding:"2px 0"}}>Keine Aktivitäten im heutigen Tagesplan</div>
-                : autoAkt.map(a=>(
-                  <div key={a.id} style={{display:"flex",alignItems:"center",gap:4,padding:"3px 0",borderBottom:"1px solid #161616"}}>
-                    <span style={{fontSize:9,color:"#3a3a3a",minWidth:32,flexShrink:0}}>{a.start}–{a.ende}</span>
-                    <span style={{fontSize:10,color:"#666",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.name}</span>
-                    <span style={{fontSize:8,color:"#2a2a2a",marginRight:3}}>MET {a.met}</span>
                     <span style={{fontSize:9,color:"#6fcf97",fontWeight:700,flexShrink:0}}>{a.kcal}</span>
                   </div>
                 ))
@@ -3313,7 +3414,7 @@ function NutritionView({ nutritionData, activePerson, activeDate, accent, person
                 <button onClick={()=>setShowAddActivity(v=>!v)} style={{width:18,height:18,borderRadius:"50%",border:"none",background:"#6fcf97",color:"#0a2a0a",cursor:"pointer",fontSize:12,lineHeight:"18px",padding:0,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>+</button>
               </div>
               {showAddActivity&&(
-                <div style={{background:"#0d0d0d",borderRadius:6,padding:"8px",marginBottom:6,border:"1px solid #2a2a2a"}}>
+                <div style={{background:"#e6efd9",borderRadius:6,padding:"8px",marginBottom:6,border:"1px solid #2a2a2a"}}>
                   <input value={newAct.name} onChange={e=>setNewAct(n=>({...n,name:e.target.value}))} placeholder="Aktivität (z.B. Spaziergang)"
                     style={{...INP,width:"100%",marginBottom:4,boxSizing:"border-box"}}/>
                   <div style={{display:"flex",gap:3,marginBottom:4}}>
@@ -3332,12 +3433,12 @@ function NutritionView({ nutritionData, activePerson, activeDate, accent, person
                 </div>
               )}
               {manualAkt.length===0&&!showAddActivity&&(
-                <div style={{fontSize:9,color:"#1e1e1e",fontStyle:"italic",padding:"2px 0"}}>Noch keine manuellen Aktivitäten</div>
+                <div style={{fontSize:9,color:"rgba(0,0,0,0.10)",fontStyle:"italic",padding:"2px 0"}}>Noch keine manuellen Aktivitäten</div>
               )}
               {manualAkt.map(a=>(
-                <div key={a.id} style={{display:"flex",alignItems:"center",gap:4,padding:"3px 0",borderBottom:"1px solid #161616"}}>
+                <div key={a.id} style={{display:"flex",alignItems:"center",gap:4,padding:"3px 0",borderBottom:"1px solid rgba(0,0,0,0.08)"}}>
                   {a.start&&<span style={{fontSize:9,color:"#3a3a3a",minWidth:32,flexShrink:0}}>{a.start}{a.ende?"–"+a.ende:""}</span>}
-                  <span style={{fontSize:10,color:"#aaa",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.name}</span>
+                  <span style={{fontSize:10,color:"#3d4a34",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.name}</span>
                   <span style={{fontSize:8,color:"#2a2a2a",marginRight:3}}>MET {a.met}</span>
                   <span style={{fontSize:9,color:"#6fcf97",fontWeight:700,flexShrink:0}}>{a.kcal_berechnet}</span>
                   <button onClick={()=>deleteActivity(a.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#2a2a2a",fontSize:11,padding:"0 2px",flexShrink:0}}>✕</button>
@@ -3347,6 +3448,34 @@ function NutritionView({ nutritionData, activePerson, activeDate, accent, person
           </div>
           )}
 
+          {/* KALORIENBILANZ: Bedarf (Grundbedarf + aktiv) vs. Zufuhr (gegessene Mahlzeiten) */}
+          <div style={{marginTop:8,padding:"8px 10px",background:"rgba(255,255,255,0.62)",borderRadius:8,border:"1px solid rgba(0,0,0,0.10)"}}>
+            <div style={{fontSize:9,color:"#5a6b4f",textTransform:"uppercase",letterSpacing:1,fontWeight:700,marginBottom:8}}>⚖️ Kalorienbilanz</div>
+            <div style={{display:"flex",gap:8}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:8,color:"#5a6b4f",textTransform:"uppercase",letterSpacing:0.5,marginBottom:3}}>Bedarf</div>
+                {aktivModus==="multiplikator"
+                  ? <div style={{fontSize:9,color:"#333"}}>{AKTIVITAET_STUFEN.find(s=>s.wert===aktivFaktor)?.label||"×"+aktivFaktor}</div>
+                  : <div style={{fontSize:9,color:"#333"}}>{bmrBase||"–"} Basis{totalActiveKcal>0&&<span style={{color:"#27ae60"}}> +{totalActiveKcal} aktiv</span>}</div>
+                }
+                <div style={{fontSize:15,fontWeight:700,color:"#2c3a22",marginTop:2}}>{kcalTarget}<span style={{fontSize:9,fontWeight:400,color:"#5a6b4f",marginLeft:2}}>kcal</span></div>
+              </div>
+              <div style={{width:1,background:"rgba(0,0,0,0.10)"}}/>
+              <div style={{flex:1}}>
+                <div style={{fontSize:8,color:"#5a6b4f",textTransform:"uppercase",letterSpacing:0.5,marginBottom:3}}>Zufuhr</div>
+                <div style={{fontSize:9,color:"#333"}}>{(dayData.mahlzeiten||[]).length} Mahlzeit{(dayData.mahlzeiten||[]).length!==1?"en":""}</div>
+                <div style={{fontSize:15,fontWeight:700,color:"#ff6b35",marginTop:2}}>{totalKcal}<span style={{fontSize:9,fontWeight:400,color:"#5a6b4f",marginLeft:2}}>kcal</span></div>
+              </div>
+            </div>
+            <div style={{marginTop:8,paddingTop:8,borderTop:"1px solid rgba(0,0,0,0.10)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontSize:9,color:"#5a6b4f",fontWeight:700}}>Bilanz</span>
+              <span style={{fontSize:13,fontWeight:700,color:(totalKcal-kcalTarget)>0?"#c1440e":"#27ae60"}}>
+                {(totalKcal-kcalTarget)>0?"+":""}{totalKcal-kcalTarget} kcal
+                <span style={{fontSize:8,fontWeight:400,marginLeft:4}}>{(totalKcal-kcalTarget)>0?"Überschuss":"Defizit"}</span>
+              </span>
+            </div>
+          </div>
+
           <div style={{fontSize:8,color:"#222",textAlign:"center",padding:"6px 0 4px"}}>💡 Hans: „Müsli 350 kcal 12g Protein" · „500ml Wasser"</div>
         </div>
       )}
@@ -3355,7 +3484,7 @@ function NutritionView({ nutritionData, activePerson, activeDate, accent, person
         <div style={{flex:1,overflowY:"auto",padding:"12px 10px"}}>
           <div style={{fontSize:10,fontWeight:700,color:"#555",marginBottom:10}}>7-Tage-Übersicht – {activePerson}</div>
           {[{label:"🔥 Kalorien",k:"kcal",total:TARGETS.kcal,color:"#ff6b35"},{label:"💧 Wasser",k:"water",total:TARGETS.water,color:"#4cc9f0"}].map(({label,k,total,color})=>(
-            <div key={k} style={{background:"#111",borderRadius:10,padding:"10px 12px",border:"1px solid #1a1a1a",marginBottom:10}}>
+            <div key={k} style={{background:"rgba(255,255,255,0.62)",borderRadius:10,padding:"10px 12px",border:"1px solid rgba(0,0,0,0.10)",marginBottom:10}}>
               <div style={{fontSize:10,fontWeight:700,color,marginBottom:8}}>{label} (Ziel: {total}{k==="kcal"?" kcal":" ml"})</div>
               <div style={{display:"flex",gap:4,alignItems:"flex-end",height:70}}>
                 {weekDays.map(d=>{
@@ -3367,20 +3496,20 @@ function NutritionView({ nutritionData, activePerson, activeDate, accent, person
                   return(
                     <div key={d} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
                       <div style={{fontSize:7,color:"#333",height:14,display:"flex",alignItems:"flex-end"}}>{v>0?(k==="water"&&v>=1000?(v/1000).toFixed(1)+"L":v):""}</div>
-                      <div style={{width:"100%",background:"#1a1a1a",borderRadius:3,height:46,display:"flex",alignItems:"flex-end",overflow:"hidden"}}>
-                        <div style={{width:"100%",height:Math.max(p,0)+"%",background:isAct?"#fff":p>=100?"#27ae60":color,borderRadius:3,transition:"height .3s"}}/>
+                      <div style={{width:"100%",background:"rgba(0,0,0,0.08)",borderRadius:3,height:46,display:"flex",alignItems:"flex-end",overflow:"hidden"}}>
+                        <div style={{width:"100%",height:Math.max(p,0)+"%",background:isAct?"#1e5631":p>=100?"#27ae60":color,borderRadius:3,transition:"height .3s"}}/>
                       </div>
-                      <div style={{fontSize:7,color:isAct?"#fff":"#444",fontWeight:isAct?700:400}}>{new Date(d+"T12:00:00").toLocaleDateString("de-DE",{weekday:"short"})}</div>
+                      <div style={{fontSize:7,color:isAct?"#1e5631":"#444",fontWeight:isAct?700:400}}>{new Date(d+"T12:00:00").toLocaleDateString("de-DE",{weekday:"short"})}</div>
                     </div>
                   );
                 })}
               </div>
             </div>
           ))}
-          <div style={{background:"#111",borderRadius:10,border:"1px solid #1a1a1a",overflow:"hidden"}}>
-            <div style={{display:"grid",gridTemplateColumns:"56px repeat(4,1fr)",borderBottom:"1px solid #1e1e1e"}}>
+          <div style={{background:"rgba(255,255,255,0.62)",borderRadius:10,border:"1px solid rgba(0,0,0,0.10)",overflow:"hidden"}}>
+            <div style={{display:"grid",gridTemplateColumns:"56px repeat(4,1fr)",borderBottom:"1px solid rgba(0,0,0,0.10)"}}>
               {["","kcal","H₂O","P","F"].map((h,i)=>(
-                <div key={i} style={{padding:"5px 3px",fontSize:9,fontWeight:700,color:"#333",textAlign:"center",background:"#0d0d0d"}}>{h}</div>
+                <div key={i} style={{padding:"5px 3px",fontSize:9,fontWeight:700,color:"#333",textAlign:"center",background:"#e6efd9"}}>{h}</div>
               ))}
             </div>
             {weekDays.map(d=>{
@@ -3392,7 +3521,7 @@ function NutritionView({ nutritionData, activePerson, activeDate, accent, person
               const w=dd.wasser||0;
               const isAct=d===activeDate;
               return(
-                <div key={d} style={{display:"grid",gridTemplateColumns:"56px repeat(4,1fr)",borderBottom:"1px solid #111",background:isAct?"rgba(255,107,0,0.07)":"#111"}}>
+                <div key={d} style={{display:"grid",gridTemplateColumns:"56px repeat(4,1fr)",borderBottom:"1px solid rgba(0,0,0,0.08)",background:isAct?"rgba(255,107,0,0.07)":"rgba(255,255,255,0.62)"}}>
                   <div style={{padding:"5px 2px",fontSize:8,fontWeight:isAct?700:400,color:isAct?"#ff6b00":"#444",textAlign:"center"}}>{new Date(d+"T12:00:00").toLocaleDateString("de-DE",{weekday:"short",day:"2-digit",month:"2-digit"})}</div>
                   <div style={{padding:"5px 2px",fontSize:9,color:kcal>=TARGETS.kcal?"#27ae60":kcal>0?"#ff6b35":"#222",textAlign:"center"}}>{kcal||"–"}</div>
                   <div style={{padding:"5px 2px",fontSize:9,color:w>=TARGETS.water?"#27ae60":w>0?"#4cc9f0":"#222",textAlign:"center"}}>{w>0?(w>=1000?(w/1000).toFixed(1)+"L":w+"ml"):"–"}</div>
@@ -3409,6 +3538,52 @@ function NutritionView({ nutritionData, activePerson, activeDate, accent, person
 }
 
 // --- REZEPT SCHNELLAUSWAHL (im Ernährungs-Tab) --------------------------------
+// --- ZUTAT/FERTIGGERICHT SCHNELLAUSWAHL (im Ernährungs-Tab) -------------------
+function ComponentQuickSelect({items, onSelect, defaultRef}){
+  const [chosen,setChosen]=useState(null);
+  const [menge,setMenge]=useState("");
+  function selectItem(it){ setChosen(it); setMenge(String(it.referenzMenge||defaultRef||100)); }
+  if(!chosen) return(
+    <div style={{maxHeight:180,overflowY:"auto"}}>
+      {(items||[]).map(it=>(
+        <button key={it.id} onClick={()=>selectItem(it)}
+          style={{display:"block",width:"100%",textAlign:"left",padding:"7px 10px",marginBottom:4,borderRadius:7,border:"1px solid #2a2a2a",background:"#111",cursor:"pointer",fontFamily:"Georgia,serif",color:"#ddd"}}>
+          <div style={{fontSize:11,fontWeight:700}}>{it.name}</div>
+          <div style={{fontSize:9,color:"#555",marginTop:1}}>{it.kcal||0} kcal / {it.referenzMenge||defaultRef||100}g</div>
+        </button>
+      ))}
+      {(items||[]).length===0&&<div style={{fontSize:10,color:"#555",textAlign:"center",padding:"10px 0"}}>Keine Einträge vorhanden.</div>}
+    </div>
+  );
+  const ref=chosen.referenzMenge||defaultRef||100;
+  const g=parseFloat(menge)||0;
+  const f=g/ref;
+  const kcal=Math.round((chosen.kcal||0)*f), protein=Math.round((chosen.protein||0)*f*10)/10, carbs=Math.round((chosen.carbs||0)*f*10)/10, fett=Math.round((chosen.fett||0)*f*10)/10;
+  return(
+    <div style={{background:"#111",borderRadius:8,padding:8}}>
+      <div style={{fontSize:11,fontWeight:700,color:"#ddd",marginBottom:6}}>{chosen.name}</div>
+      <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:8}}>
+        <input type="number" value={menge} onChange={e=>setMenge(e.target.value)}
+          style={{width:70,border:"1px solid #333",borderRadius:5,padding:"3px 6px",fontFamily:"Georgia,serif",fontSize:11,background:"#1a1a1a",color:"#ddd",outline:"none"}}/>
+        <span style={{fontSize:9,color:"#888"}}>Gramm</span>
+      </div>
+      <div style={{background:"#1a1a1a",borderRadius:6,padding:"5px 8px",marginBottom:8,display:"flex",gap:8,justifyContent:"space-around"}}>
+        <span style={{fontSize:9,color:"#ff6b35"}}>{kcal} kcal</span>
+        <span style={{fontSize:9,color:"#9b72cf"}}>{protein}g P</span>
+        <span style={{fontSize:9,color:"#c8a200"}}>{carbs}g C</span>
+        <span style={{fontSize:9,color:"#888"}}>{fett}g F</span>
+      </div>
+      <div style={{display:"flex",gap:4}}>
+        <button onClick={()=>onSelect(chosen,g,{kcal,protein,carbs,fett})}
+          style={{flex:1,padding:"5px",borderRadius:10,border:"none",background:"#ff6b35",color:"#fff",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",fontWeight:700}}>
+          Eintragen
+        </button>
+        <button onClick={()=>setChosen(null)} style={{padding:"5px 8px",borderRadius:10,border:"1px solid #2a2a2a",background:"transparent",cursor:"pointer",fontSize:10,color:"#555"}}>✕</button>
+      </div>
+    </div>
+  );
+}
+
 function RecipeQuickSelect({recipes,onSelect}){
   const [chosen,setChosen]=useState(null);
   const [portionen,setPortionen]=useState(1);
@@ -3493,8 +3668,173 @@ function RecipeQuickSelect({recipes,onSelect}){
   );
 }
 
+// --- ZUTATEN-DATENBANK & REZEPT-BERECHNUNG -------------------------------------
+function normName(s){ return (s||"").trim().toLowerCase(); }
+function findIngredient(name, ingredients){
+  const n=normName(name);
+  if(!n) return null;
+  return (ingredients||[]).find(i=>normName(i.name)===n)||null;
+}
+// Fertiggericht auf "pro 100g" normalisieren (Nährwerte sind pro referenzMenge Gramm hinterlegt)
+function findFertiggerichtNorm(name, fertiggerichte){
+  const n=normName(name);
+  if(!n) return null;
+  const f=(fertiggerichte||[]).find(x=>normName(x.name)===n);
+  if(!f) return null;
+  const ref=parseFloat(f.referenzMenge)||100;
+  const fac=100/ref;
+  return {kcal:(f.kcal||0)*fac, protein:(f.protein||0)*fac, carbs:(f.carbs||0)*fac, zucker:(f.zucker||0)*fac,
+    fett:(f.fett||0)*fac, gesFett:(f.gesFett||0)*fac, ballaststoffe:(f.ballaststoffe||0)*fac};
+}
+// Sucht eine Rezept-Komponente (Zutat ODER Fertiggericht) je nach typ-Feld, normalisiert auf pro 100g/ml
+function findComponent(z, ingredients, fertiggerichte){
+  if(z.typ==="fertiggericht") return findFertiggerichtNorm(z.name, fertiggerichte);
+  return findIngredient(z.name, ingredients);
+}
+// Grobe Umrechnung gängiger Rezept-Einheiten in Gramm/Milliliter (Basis der Nährwert-Datenbank: pro 100g/ml)
+const R2_UNIT_GRAMS = {g:1, ml:1, EL:15, TL:5, "Stück":100};
+function zutatToGramm(z){
+  const menge=parseFloat(String(z.menge||"0").replace(",","."))||0;
+  const factor=R2_UNIT_GRAMS[z.einheit]!=null?R2_UNIT_GRAMS[z.einheit]:1;
+  return menge*factor;
+}
+// Summiert die Nährwerte eines Rezepts (GESAMT, nicht pro Portion) anhand von Zutaten- UND Fertiggerichte-Datenbank
+function computeRecipeMacrosFromZutaten(zutaten, ingredients, fertiggerichte){
+  let kcal=0,protein=0,carbs=0,zucker=0,fett=0,gesFett=0,ballaststoffe=0;
+  const missing=[];
+  (zutaten||[]).forEach(z=>{
+    if(!z.name||!z.name.trim()) return;
+    const comp=findComponent(z, ingredients, fertiggerichte);
+    if(!comp){ missing.push(z.name); return; }
+    const f=zutatToGramm(z)/100;
+    kcal+=(comp.kcal||0)*f; protein+=(comp.protein||0)*f; carbs+=(comp.carbs||0)*f;
+    zucker+=(comp.zucker||0)*f; fett+=(comp.fett||0)*f; gesFett+=(comp.gesFett||0)*f;
+    ballaststoffe+=(comp.ballaststoffe||0)*f;
+  });
+  return {
+    kcal:Math.round(kcal), protein:Math.round(protein*10)/10, carbs:Math.round(carbs*10)/10,
+    zucker:Math.round(zucker*10)/10, fett:Math.round(fett*10)/10, gesFett:Math.round(gesFett*10)/10,
+    ballaststoffe:Math.round(ballaststoffe*10)/10, missing,
+  };
+}
+// Liefert die Makros PRO PORTION für ein Rezept (live berechnet bei berechnungsart="zutaten")
+function getRecipeMacrosProPortion(r, ingredients, fertiggerichte){
+  const port=parseFloat(r.portionen)||1;
+  if(r.berechnungsart==="zutaten"){
+    const tot=computeRecipeMacrosFromZutaten(r.zutaten, ingredients, fertiggerichte);
+    return {kcal:Math.round(tot.kcal/port), protein:Math.round(tot.protein/port*10)/10, carbs:Math.round(tot.carbs/port*10)/10,
+      fett:Math.round(tot.fett/port*10)/10, zucker:Math.round(tot.zucker/port*10)/10, gesFett:Math.round(tot.gesFett/port*10)/10,
+      ballaststoffe:Math.round(tot.ballaststoffe/port*10)/10, missing:tot.missing};
+  }
+  return {kcal:r.makrosProPortion?.kcal||0, protein:r.makrosProPortion?.protein||0, carbs:r.makrosProPortion?.carbs||0, fett:r.makrosProPortion?.fett||0, missing:[]};
+}
+// Simpler CSV-Parser (Komma oder Semikolon, unterstützt "..."-Quoting)
+function parseCSV(text){
+  const firstLine=(text.split(/\r?\n/).find(l=>l.trim().length>0))||"";
+  const delim=(firstLine.split(";").length>firstLine.split(",").length)?";":",";
+  const lines=text.split(/\r?\n/).filter(l=>l.trim().length>0);
+  if(!lines.length) return {header:[],rows:[]};
+  function splitLine(line){
+    const out=[]; let cur=""; let inQ=false;
+    for(let i=0;i<line.length;i++){
+      const c=line[i];
+      if(c==='"'){ if(inQ&&line[i+1]==='"'){cur+='"';i++;} else inQ=!inQ; }
+      else if(c===delim&&!inQ){ out.push(cur); cur=""; }
+      else cur+=c;
+    }
+    out.push(cur);
+    return out.map(s=>s.trim());
+  }
+  const header=splitLine(lines[0]).map(h=>h.toLowerCase());
+  const rows=lines.slice(1).map(splitLine);
+  return {header,rows};
+}
+function num(v){ return parseFloat(String(v||"0").replace(",","."))||0; }
+// Zutaten-CSV importieren: Spalten name,kcal,protein,carbs,zucker,fett,gesfett,ballaststoffe (pro 100g/ml). Duplikate (Name) werden überschrieben.
+function importIngredientsCSV(text, existingIngredients){
+  const {header,rows}=parseCSV(text);
+  const idx=k=>header.indexOf(k);
+  const iName=idx("name"),iKcal=idx("kcal"),iProt=idx("protein"),iCarbs=idx("carbs"),iZucker=idx("zucker"),iFett=idx("fett"),iGesFett=idx("gesfett"),iBallast=idx("ballaststoffe");
+  let list=[...(existingIngredients||[])]; let count=0;
+  rows.forEach(r=>{
+    const name=(r[iName]||"").trim();
+    if(!name) return;
+    const obj={name,kcal:num(r[iKcal]),protein:num(r[iProt]),carbs:num(r[iCarbs]),zucker:num(r[iZucker]),fett:num(r[iFett]),gesFett:num(r[iGesFett]),ballaststoffe:num(r[iBallast])};
+    const i=list.findIndex(x=>normName(x.name)===normName(name));
+    if(i>=0) list[i]={...list[i],...obj}; else list.push({id:"ing_"+uid(),...obj});
+    count++;
+  });
+  return {list,count};
+}
+// Fertiggerichte-CSV importieren: Spalten name,referenzmenge,kcal,protein,carbs,zucker,fett,gesfett,ballaststoffe. Duplikate (Name) werden überschrieben.
+function importFertiggerichteCSV(text, existingFertiggerichte){
+  const {header,rows}=parseCSV(text);
+  const idx=k=>header.indexOf(k);
+  const iName=idx("name"),iRef=idx("referenzmenge"),iKcal=idx("kcal"),iProt=idx("protein"),iCarbs=idx("carbs"),iZucker=idx("zucker"),iFett=idx("fett"),iGesFett=idx("gesfett"),iBallast=idx("ballaststoffe");
+  let list=[...(existingFertiggerichte||[])]; let count=0;
+  rows.forEach(r=>{
+    const name=(r[iName]||"").trim();
+    if(!name) return;
+    const i=list.findIndex(x=>normName(x.name)===normName(name));
+    const obj={name,referenzMenge:iRef>=0?(num(r[iRef])||100):100,kcal:num(r[iKcal]),protein:num(r[iProt]),carbs:num(r[iCarbs]),zucker:num(r[iZucker]),fett:num(r[iFett]),gesFett:num(r[iGesFett]),ballaststoffe:num(r[iBallast])};
+    if(i>=0) list[i]={...list[i],...obj}; else list.push({id:"fg_"+uid(),ratings:{},...obj});
+    count++;
+  });
+  return {list,count};
+}
+// Getränke-CSV importieren: Spalten name,kcal,protein,carbs,zucker,fett,gesfett,ballaststoffe (pro 100ml). Duplikate (Name) werden überschrieben.
+function importGetraenkeCSV(text, existingGetraenke){
+  const {header,rows}=parseCSV(text);
+  const idx=k=>header.indexOf(k);
+  const iName=idx("name"),iKcal=idx("kcal"),iProt=idx("protein"),iCarbs=idx("carbs"),iZucker=idx("zucker"),iFett=idx("fett"),iGesFett=idx("gesfett"),iBallast=idx("ballaststoffe");
+  let list=[...(existingGetraenke||[])]; let count=0;
+  rows.forEach(r=>{
+    const name=(r[iName]||"").trim();
+    if(!name) return;
+    const obj={name,kcal:num(r[iKcal]),protein:num(r[iProt]),carbs:num(r[iCarbs]),zucker:num(r[iZucker]),fett:num(r[iFett]),gesFett:num(r[iGesFett]),ballaststoffe:num(r[iBallast])};
+    const i=list.findIndex(x=>normName(x.name)===normName(name));
+    if(i>=0) list[i]={...list[i],...obj}; else list.push({id:"gt_"+uid(),...obj});
+    count++;
+  });
+  return {list,count};
+}
+// Rezepte-CSV importieren: Spalten titel,portionen,zubereitung,zutat_name,zutat_typ,menge,einheit (1 Zeile pro Zutat/Fertiggericht, titel wiederholt sich)
+// zutat_typ: "zutat" (Standard, wenn leer) oder "fertiggericht"
+function importRecipesCSV(text, existingRecipes){
+  const {header,rows}=parseCSV(text);
+  const idx=k=>header.indexOf(k);
+  const iTitel=idx("titel"),iPort=idx("portionen"),iZub=idx("zubereitung"),iZName=idx("zutat_name"),iZTyp=idx("zutat_typ"),iMenge=idx("menge"),iEinheit=idx("einheit");
+  const groups={}; const order=[];
+  rows.forEach(r=>{
+    const titel=(r[iTitel]||"").trim();
+    if(!titel) return;
+    if(!groups[titel]){ groups[titel]={title:titel,portionen:num(iPort>=0?r[iPort]:1)||1,zubereitung:iZub>=0?(r[iZub]||""):"",zutaten:[]}; order.push(titel); }
+    if(iZub>=0&&!groups[titel].zubereitung&&r[iZub]) groups[titel].zubereitung=r[iZub];
+    const zname=iZName>=0?(r[iZName]||"").trim():"";
+    if(zname){
+      const typ=(iZTyp>=0?(r[iZTyp]||"").trim().toLowerCase():"")==="fertiggericht"?"fertiggericht":"zutat";
+      groups[titel].zutaten.push({id:uid(),name:zname,typ,menge:iMenge>=0?(r[iMenge]||"").trim():"",einheit:iEinheit>=0?((r[iEinheit]||"g").trim()):"g"});
+    }
+  });
+  let list=[...(existingRecipes||[])]; let count=0;
+  order.forEach(titel=>{
+    const g=groups[titel];
+    const i=list.findIndex(x=>normName(x.title)===normName(titel));
+    const recipe={
+      id: i>=0?list[i].id:"rec_"+uid(), title:g.title, portionen:g.portionen, zutaten:g.zutaten,
+      zubereitung:g.zubereitung, berechnungsart:"zutaten",
+      makrosProPortion: i>=0?list[i].makrosProPortion:{kcal:0,protein:0,carbs:0,fett:0},
+      createdAt: i>=0?list[i].createdAt:todayStr(),
+      lastEaten: i>=0?list[i].lastEaten:undefined, ratings: i>=0?list[i].ratings:undefined,
+    };
+    if(i>=0) list[i]=recipe; else list.push(recipe);
+    count++;
+  });
+  return {list,count};
+}
+
 // --- REZEPTE ------------------------------------------------------------------
-function RecipesView({recipes,onSave,onAddRecipe,accent,apiKey,today,onMarkEaten}){
+function RecipesView({recipes,onSave,onAddRecipe,accent,apiKey,today,onMarkEaten,ingredients,onSaveIngredients,fertiggerichte,onSaveFertiggerichte,getraenke,onSaveGetraenke,onLogEaten}){
   const [view,setView]=useState("liste"); // "liste"|"neu"|"url"
   const [editId,setEditId]=useState(null);
   // Zähler-Bearbeitung
@@ -3508,13 +3848,137 @@ function RecipesView({recipes,onSave,onAddRecipe,accent,apiKey,today,onMarkEaten
   const [sortBy,setSortBy]=useState("standard"); // "standard"|"az"|"za"|"tage_desc"|"tage_asc"|"gesundheit"|"geschmack"|"kalorien"|"schwierigkeit"
 
   // Formular-State
-  const emptyForm={title:"",portionen:"1",zutaten:[{id:uid(),name:"",menge:""}],manKcal:"",manProt:"",manCarbs:"",manFett:""};
+  const emptyForm={title:"",portionen:"1",berechnungsart:"manuell",zubereitung:"",zutaten:[{id:uid(),name:"",menge:"",einheit:"g",typ:"zutat"}],manKcal:"",manProt:"",manCarbs:"",manFett:""};
   const [form,setForm]=useState(emptyForm);
   const [urlInput,setUrlInput]=useState("");
   const [urlLoading,setUrlLoading]=useState(false);
   const [urlMsg,setUrlMsg]=useState("");
   const [saveMsg,setSaveMsg]=useState("");
   const [kiLoading,setKiLoading]=useState(false);
+  const [expandedIds,setExpandedIds]=useState({});
+  function toggleExpand(id){ setExpandedIds(e=>({...e,[id]:!e[id]})); }
+
+  // Zutaten-Datenbank Verwaltung (Tab "Zutaten")
+  const emptyIng={name:"",kcal:"",protein:"",carbs:"",zucker:"",fett:"",gesFett:"",ballaststoffe:""};
+  const [ingForm,setIngForm]=useState(emptyIng);
+  const [ingEditId,setIngEditId]=useState(null);
+  function resetIngForm(){ setIngForm(emptyIng); setIngEditId(null); }
+  async function saveIngredient(){
+    if(!ingForm.name.trim()) return;
+    const obj={id:ingEditId||("ing_"+uid()),name:ingForm.name.trim(),kcal:num(ingForm.kcal),protein:num(ingForm.protein),
+      carbs:num(ingForm.carbs),zucker:num(ingForm.zucker),fett:num(ingForm.fett),gesFett:num(ingForm.gesFett),ballaststoffe:num(ingForm.ballaststoffe)};
+    if(ingEditId){ await onSaveIngredients((ingredients||[]).map(i=>i.id===ingEditId?obj:i)); }
+    else { await onSaveIngredients([...(ingredients||[]),obj]); }
+    resetIngForm();
+  }
+  function startEditIngredient(i){
+    setIngForm({name:i.name,kcal:String(i.kcal||""),protein:String(i.protein||""),carbs:String(i.carbs||""),
+      zucker:String(i.zucker||""),fett:String(i.fett||""),gesFett:String(i.gesFett||""),ballaststoffe:String(i.ballaststoffe||"")});
+    setIngEditId(i.id);
+  }
+  async function deleteIngredient(id){ await onSaveIngredients((ingredients||[]).filter(i=>i.id!==id)); }
+
+  // Fertiggerichte-Datenbank Verwaltung (Tab "Fertiggerichte")
+  const emptyFg={name:"",referenzMenge:"100",kcal:"",protein:"",carbs:"",zucker:"",fett:"",gesFett:"",ballaststoffe:""};
+  const [fgForm,setFgForm]=useState(emptyFg);
+  const [fgEditId,setFgEditId]=useState(null);
+  const [fgFilterText,setFgFilterText]=useState("");
+  const [fgSortBy,setFgSortBy]=useState("standard");
+  const [fgEditEatenId,setFgEditEatenId]=useState(null);
+  const [fgEditEatenDate,setFgEditEatenDate]=useState("");
+  function resetFgForm(){ setFgForm(emptyFg); setFgEditId(null); }
+  async function saveFertiggericht(){
+    if(!fgForm.name.trim()) return;
+    const prev=fgEditId?(fertiggerichte||[]).find(f=>f.id===fgEditId):null;
+    const obj={id:fgEditId||("fg_"+uid()),name:fgForm.name.trim(),referenzMenge:num(fgForm.referenzMenge)||100,
+      kcal:num(fgForm.kcal),protein:num(fgForm.protein),carbs:num(fgForm.carbs),zucker:num(fgForm.zucker),
+      fett:num(fgForm.fett),gesFett:num(fgForm.gesFett),ballaststoffe:num(fgForm.ballaststoffe),
+      ratings:prev?.ratings, lastEaten:prev?.lastEaten};
+    if(fgEditId){ await onSaveFertiggerichte((fertiggerichte||[]).map(f=>f.id===fgEditId?obj:f)); }
+    else { await onSaveFertiggerichte([...(fertiggerichte||[]),obj]); }
+    resetFgForm();
+  }
+  function startEditFertiggericht(f){
+    setFgForm({name:f.name,referenzMenge:String(f.referenzMenge||100),kcal:String(f.kcal||""),protein:String(f.protein||""),
+      carbs:String(f.carbs||""),zucker:String(f.zucker||""),fett:String(f.fett||""),gesFett:String(f.gesFett||""),ballaststoffe:String(f.ballaststoffe||"")});
+    setFgEditId(f.id);
+  }
+  async function deleteFertiggericht(id){ await onSaveFertiggerichte((fertiggerichte||[]).filter(f=>f.id!==id)); }
+  async function updateFgRating(id,key,val){
+    await onSaveFertiggerichte((fertiggerichte||[]).map(f=>f.id===id?{...f,ratings:{...(f.ratings||{}),[key]:val===((f.ratings||{})[key])?0:val}}:f));
+  }
+
+  // Getränke-Datenbank Verwaltung (Tab "Getränke")
+  const emptyGt={name:"",kcal:"",protein:"",carbs:"",zucker:"",fett:"",gesFett:"",ballaststoffe:""};
+  const [gtForm,setGtForm]=useState(emptyGt);
+  const [gtEditId,setGtEditId]=useState(null);
+  function resetGtForm(){ setGtForm(emptyGt); setGtEditId(null); }
+  async function saveGetraenk(){
+    if(!gtForm.name.trim()) return;
+    const obj={id:gtEditId||("gt_"+uid()),name:gtForm.name.trim(),kcal:num(gtForm.kcal),protein:num(gtForm.protein),
+      carbs:num(gtForm.carbs),zucker:num(gtForm.zucker),fett:num(gtForm.fett),gesFett:num(gtForm.gesFett),ballaststoffe:num(gtForm.ballaststoffe)};
+    if(gtEditId){ await onSaveGetraenke((getraenke||[]).map(g=>g.id===gtEditId?obj:g)); }
+    else { await onSaveGetraenke([...(getraenke||[]),obj]); }
+    resetGtForm();
+  }
+  function startEditGetraenk(g){
+    setGtForm({name:g.name,kcal:String(g.kcal||""),protein:String(g.protein||""),carbs:String(g.carbs||""),
+      zucker:String(g.zucker||""),fett:String(g.fett||""),gesFett:String(g.gesFett||""),ballaststoffe:String(g.ballaststoffe||"")});
+    setGtEditId(g.id);
+  }
+  async function deleteGetraenk(id){ await onSaveGetraenke((getraenke||[]).filter(g=>g.id!==id)); }
+
+  // CSV-Import (Tab "Import")
+  const [csvIngFile,setCsvIngFile]=useState(null);
+  const [csvFgFile,setCsvFgFile]=useState(null);
+  const [csvGtFile,setCsvGtFile]=useState(null);
+  const [csvRecFile,setCsvRecFile]=useState(null);
+  const [importMsg,setImportMsg]=useState("");
+  const [importLoading,setImportLoading]=useState(false);
+  function readFileText(file){
+    return new Promise((res,rej)=>{
+      const r=new FileReader();
+      r.onload=()=>res(r.result);
+      r.onerror=()=>rej(new Error("Datei konnte nicht gelesen werden."));
+      r.readAsText(file,"utf-8");
+    });
+  }
+  async function runImport(){
+    if(!csvIngFile&&!csvFgFile&&!csvGtFile&&!csvRecFile){ setImportMsg("Bitte mindestens eine CSV-Datei wählen."); return; }
+    setImportLoading(true); setImportMsg("");
+    try{
+      let newIngredients=ingredients||[];
+      let newFertiggerichte=fertiggerichte||[];
+      let ingCount=0, fgCount=0, gtCount=0, recCount=0;
+      if(csvIngFile){
+        const text=await readFileText(csvIngFile);
+        const res=importIngredientsCSV(text,newIngredients);
+        newIngredients=res.list; ingCount=res.count;
+        await onSaveIngredients(newIngredients);
+      }
+      if(csvFgFile){
+        const text=await readFileText(csvFgFile);
+        const res=importFertiggerichteCSV(text,newFertiggerichte);
+        newFertiggerichte=res.list; fgCount=res.count;
+        await onSaveFertiggerichte(newFertiggerichte);
+      }
+      if(csvGtFile){
+        const text=await readFileText(csvGtFile);
+        const res=importGetraenkeCSV(text,getraenke);
+        gtCount=res.count;
+        await onSaveGetraenke(res.list);
+      }
+      if(csvRecFile){
+        const text=await readFileText(csvRecFile);
+        const res=importRecipesCSV(text,recipes);
+        recCount=res.count;
+        await onSave(res.list);
+      }
+      setImportMsg(`✓ Import abgeschlossen: ${ingCount} Zutat(en), ${fgCount} Fertiggericht(e), ${gtCount} Getränk(e), ${recCount} Rezept(e).`);
+      setCsvIngFile(null); setCsvFgFile(null); setCsvGtFile(null); setCsvRecFile(null);
+    }catch(e){ setImportMsg("Fehler: "+e.message); }
+    setImportLoading(false);
+  }
 
   function resetForm(){ setForm(emptyForm); setEditId(null); }
 
@@ -3529,7 +3993,7 @@ function RecipesView({recipes,onSave,onAddRecipe,accent,apiKey,today,onMarkEaten
     setForm(f=>({...f,zutaten:f.zutaten.map(z=>z.id===id?{...z,[field]:val}:z)}));
   }
   function addZutat(){
-    setForm(f=>({...f,zutaten:[...f.zutaten,{id:uid(),name:"",menge:""}]}));
+    setForm(f=>({...f,zutaten:[...f.zutaten,{id:uid(),name:"",menge:"",einheit:"g",typ:"zutat"}]}));
   }
   function removeZutat(id){
     setForm(f=>({...f,zutaten:f.zutaten.filter(z=>z.id!==id)}));
@@ -3590,12 +4054,23 @@ function RecipesView({recipes,onSave,onAddRecipe,accent,apiKey,today,onMarkEaten
   async function saveRecipe(){
     if(!form.title.trim()){ setSaveMsg("Titel erforderlich."); return; }
     const prev=editId?(recipes||[]).find(r=>r.id===editId):null;
+    const zutaten=form.zutaten.filter(z=>z.name.trim());
+    let makros;
+    if(form.berechnungsart==="zutaten"){
+      const port=parseFloat(form.portionen)||1;
+      const tot=computeRecipeMacrosFromZutaten(zutaten,ingredients,fertiggerichte);
+      makros={kcal:Math.round(tot.kcal/port),protein:Math.round(tot.protein/port*10)/10,carbs:Math.round(tot.carbs/port*10)/10,fett:Math.round(tot.fett/port*10)/10};
+    } else {
+      makros={kcal:parseInt(form.manKcal)||0,protein:parseFloat(form.manProt)||0,carbs:parseFloat(form.manCarbs)||0,fett:parseFloat(form.manFett)||0};
+    }
     const recipe={
       id: editId||"rec_"+uid(),
       title: form.title.trim(),
       portionen: parseFloat(form.portionen)||1,
-      zutaten: form.zutaten.filter(z=>z.name.trim()),
-      makrosProPortion: {kcal:parseInt(form.manKcal)||0,protein:parseFloat(form.manProt)||0,carbs:parseFloat(form.manCarbs)||0,fett:parseFloat(form.manFett)||0},
+      berechnungsart: form.berechnungsart,
+      zubereitung: form.zubereitung,
+      zutaten,
+      makrosProPortion: makros,
       createdAt: todayStr(),
       lastEaten: prev?.lastEaten,
       ratings: prev?.ratings,
@@ -3611,7 +4086,9 @@ function RecipesView({recipes,onSave,onAddRecipe,accent,apiKey,today,onMarkEaten
 
   function startEdit(r){
     setForm({title:r.title,portionen:String(r.portionen||1),
-      zutaten:r.zutaten?.length?r.zutaten.map(z=>({...z})):[{id:uid(),name:"",menge:""}],
+      berechnungsart:r.berechnungsart||"manuell",
+      zubereitung:r.zubereitung||"",
+      zutaten:r.zutaten?.length?r.zutaten.map(z=>({...z,einheit:z.einheit||"g",typ:z.typ||"zutat"})):[{id:uid(),name:"",menge:"",einheit:"g",typ:"zutat"}],
       manKcal:String(r.makrosProPortion?.kcal||""),manProt:String(r.makrosProPortion?.protein||""),
       manCarbs:String(r.makrosProPortion?.carbs||""),manFett:String(r.makrosProPortion?.fett||"")});
     setEditId(r.id); setView("neu");
@@ -3657,6 +4134,12 @@ function RecipesView({recipes,onSave,onAddRecipe,accent,apiKey,today,onMarkEaten
     }
     if(["gesundheit","kalorien","geschmack","schwierigkeit"].includes(sortBy))
       return ((b.ratings||{})[sortBy]||0)-((a.ratings||{})[sortBy]||0);
+    if(["kcal_desc","protein_desc","carbs_desc","fett_desc"].includes(sortBy)){
+      const key=sortBy.split("_")[0];
+      const ma=getRecipeMacrosProPortion(a,ingredients,fertiggerichte)[key]||0;
+      const mb=getRecipeMacrosProPortion(b,ingredients,fertiggerichte)[key]||0;
+      return mb-ma;
+    }
     return 0;
   });
   const activeFilters=(filterText?1:0)+(filterDays!=="alle"?1:0)+(sortBy!=="standard"?1:0);
@@ -3667,7 +4150,7 @@ function RecipesView({recipes,onSave,onAddRecipe,accent,apiKey,today,onMarkEaten
       {view!=="liste"&&(
         <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 14px 7px",background:"#f9f7f3",borderBottom:"1px solid #ece9e4",flexShrink:0}}>
           <button onClick={()=>{setView("liste");resetForm();setUrlInput("");setUrlMsg("");}} style={{background:"none",border:"none",cursor:"pointer",color:"#888",fontSize:16,padding:0}}>←</button>
-          <span style={{fontSize:12,fontWeight:700,color:"#555"}}>{view==="url"?"Aus URL importieren":"Rezept "+(editId?"bearbeiten":"anlegen")}</span>
+          <span style={{fontSize:12,fontWeight:700,color:"#555"}}>{view==="url"?"Aus URL importieren":view==="zutaten"?"Zutaten-Datenbank":view==="fertiggerichte"?"Fertiggerichte":view==="getraenke"?"Getränke-Datenbank":view==="import"?"CSV-Import":"Rezept "+(editId?"bearbeiten":"anlegen")}</span>
         </div>
       )}
 
@@ -3691,8 +4174,12 @@ function RecipesView({recipes,onSave,onAddRecipe,accent,apiKey,today,onMarkEaten
               <option value="tage_asc">Kürzeste Pause zuerst</option>
               <option value="gesundheit">🥗 Gesundheit ↓</option>
               <option value="geschmack">😋 Geschmack ↓</option>
-              <option value="kalorien">⚡ Kalorien ↓</option>
+              <option value="kalorien">⚡ Kalorien-Rating ↓</option>
               <option value="schwierigkeit">👨‍🍳 Schwierigkeit ↓</option>
+              <option value="kcal_desc">🔥 Kalorien (kcal) ↓</option>
+              <option value="protein_desc">💪 Protein (g) ↓</option>
+              <option value="carbs_desc">🌾 Carbs (g) ↓</option>
+              <option value="fett_desc">🥑 Fett (g) ↓</option>
             </select>
           </div>
           {/* Tage-Filter */}
@@ -3743,6 +4230,8 @@ function RecipesView({recipes,onSave,onAddRecipe,accent,apiKey,today,onMarkEaten
               const badgeColor=ds===null?"#bbb":ds===0?"#27ae60":ds<=3?"#2980b9":ds<=7?"#e67e22":"#c0392b";
               const badgeBg=ds===null?"#f5f5f5":ds===0?"#eafaf1":ds<=3?"#eaf3fb":ds<=7?"#fef5e7":"#fdf0ef";
               const rats=r.ratings||{};
+              const liveMacros=getRecipeMacrosProPortion(r,ingredients,fertiggerichte);
+              const hasMissing=liveMacros.missing&&liveMacros.missing.length>0;
               return(
               <div key={r.id} style={{background:"#fff",borderRadius:10,padding:"12px 14px",marginBottom:10,border:"1px solid #ece9e4",boxShadow:"0 1px 4px rgba(0,0,0,.04)"}}>
                 <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
@@ -3763,10 +4252,16 @@ function RecipesView({recipes,onSave,onAddRecipe,accent,apiKey,today,onMarkEaten
                       {r.zutaten?.length>0&&<span style={{fontSize:10,color:"#888"}}>{r.zutaten.length} Zutaten</span>}
                     </div>
                     {/* Makros */}
-                    <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8}}>
-                      {[[(r.makrosProPortion?.kcal||0)+" kcal","kcal","#e74c3c"],[(r.makrosProPortion?.protein||0)+"g","P","#9b72cf"],[(r.makrosProPortion?.carbs||0)+"g","C","#c8a200"],[(r.makrosProPortion?.fett||0)+"g","F","#e67e22"]].map(([v,l,c])=>(
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8,alignItems:"center"}}>
+                      {[[liveMacros.kcal+" kcal","kcal","#e74c3c"],[liveMacros.protein+"g","P","#9b72cf"],[liveMacros.carbs+"g","C","#c8a200"],[liveMacros.fett+"g","F","#e67e22"]].map(([v,l,c])=>(
                         <span key={l} style={{fontSize:9,background:c+"15",color:c,borderRadius:8,padding:"2px 7px",fontWeight:700}}>{v} {l}</span>
                       ))}
+                      {hasMissing&&(
+                        <span title={"Fehlt in Zutaten-Datenbank: "+liveMacros.missing.join(", ")}
+                          style={{fontSize:9,background:"#fdf0ef",color:"#c0392b",borderRadius:8,padding:"2px 7px",fontWeight:700}}>
+                          ⚠ {liveMacros.missing.length} Zutat(en) fehlt in DB
+                        </span>
+                      )}
                     </div>
 
                     {/* ── BEWERTUNGEN (2×2 Grid, inline klickbar) ── */}
@@ -3783,8 +4278,23 @@ function RecipesView({recipes,onSave,onAddRecipe,accent,apiKey,today,onMarkEaten
                     {/* Zutaten-Preview */}
                     {r.zutaten?.length>0&&(
                       <div style={{marginTop:3,fontSize:10,color:"#888",lineHeight:1.6}}>
-                        {r.zutaten.slice(0,4).map(z=>z.menge+" "+z.name).join(" · ")}
+                        {r.zutaten.slice(0,4).map(z=>z.menge+(z.einheit&&z.einheit!=="g"?z.einheit:"g")+" "+z.name).join(" · ")}
                         {r.zutaten.length>4&&" · +"+( r.zutaten.length-4)+" weitere"}
+                      </div>
+                    )}
+
+                    {/* Zubereitung (einklappbar) */}
+                    {r.zubereitung&&r.zubereitung.trim()&&(
+                      <div style={{marginTop:6}}>
+                        <button onClick={()=>toggleExpand(r.id)}
+                          style={{background:"none",border:"none",cursor:"pointer",padding:0,fontSize:10,color:accent,fontFamily:"Georgia,serif",fontWeight:700,display:"flex",alignItems:"center",gap:3}}>
+                          {expandedIds[r.id]?"▾":"▸"} Zubereitung
+                        </button>
+                        {expandedIds[r.id]&&(
+                          <div style={{marginTop:5,fontSize:11,color:"#555",lineHeight:1.6,whiteSpace:"pre-wrap",background:"#faf9f7",borderRadius:8,padding:"8px 10px",border:"1px solid #f0ede8"}}>
+                            {r.zubereitung}
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -3792,8 +4302,8 @@ function RecipesView({recipes,onSave,onAddRecipe,accent,apiKey,today,onMarkEaten
                     <div style={{display:"flex",alignItems:"center",gap:5,marginTop:9,flexWrap:"wrap"}}>
                       {/* Heute-Taste */}
                       <button
-                        onClick={()=>onMarkEaten&&onMarkEaten(r.id,today)}
-                        title="Heute als gegessen markieren"
+                        onClick={()=>onLogEaten?onLogEaten("rezept",r,today):(onMarkEaten&&onMarkEaten(r.id,today))}
+                        title="Heute als gegessen markieren und in Ernährung eintragen"
                         style={{padding:"3px 10px",borderRadius:20,border:"1px solid #27ae60",
                           background:"#eafaf1",color:"#27ae60",cursor:"pointer",fontSize:10,
                           fontFamily:"Georgia,serif",fontWeight:700}}>
@@ -3806,7 +4316,7 @@ function RecipesView({recipes,onSave,onAddRecipe,accent,apiKey,today,onMarkEaten
                             onChange={e=>setEditEatenDate(e.target.value)}
                             max={today}
                             style={{fontSize:10,padding:"2px 5px",border:"1px solid #ddd",borderRadius:6,fontFamily:"Georgia,serif",outline:"none"}}/>
-                          <button onClick={()=>{ onMarkEaten&&onMarkEaten(r.id,editEatenDate); setEditEatenId(null); }}
+                          <button onClick={()=>{ if(onLogEaten) onLogEaten("rezept",r,editEatenDate); else onMarkEaten&&onMarkEaten(r.id,editEatenDate); setEditEatenId(null); }}
                             style={{padding:"2px 8px",borderRadius:20,border:"none",background:accent,color:"#fff",cursor:"pointer",fontSize:10}}>OK</button>
                           <button onClick={()=>setEditEatenId(null)}
                             style={{padding:"2px 6px",borderRadius:20,border:"1px solid #ddd",background:"#fff",cursor:"pointer",fontSize:10,color:"#888"}}>✕</button>
@@ -3866,25 +4376,84 @@ function RecipesView({recipes,onSave,onAddRecipe,accent,apiKey,today,onMarkEaten
               <input type="number" value={form.portionen} min="0.5" step="0.5" onChange={e=>setForm(f=>({...f,portionen:e.target.value}))}
                 style={{...INP,width:80}}/>
             </div>
+            {/* Berechnungsart */}
+            <div style={{marginBottom:12}}>
+              <div style={{fontSize:9,color:"#aaa",marginBottom:6,textTransform:"uppercase",letterSpacing:1}}>Berechnung der Nährwerte</div>
+              <div style={{display:"flex",gap:6}}>
+                {[["manuell","✎ Manuell eingeben"],["zutaten","🥕 Aus Zutaten berechnen"]].map(([v,l])=>(
+                  <button key={v} onClick={()=>setForm(f=>({...f,berechnungsart:v}))}
+                    style={{flex:1,padding:"6px 4px",borderRadius:8,border:"1px solid "+(form.berechnungsart===v?accent:"#ddd"),
+                      background:form.berechnungsart===v?accent+"18":"transparent",color:form.berechnungsart===v?accent:"#888",
+                      cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",fontWeight:form.berechnungsart===v?700:400}}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+            </div>
             {/* Zutaten */}
             <div style={{marginBottom:12}}>
-              <div style={{fontSize:9,color:"#aaa",marginBottom:6,textTransform:"uppercase",letterSpacing:1}}>Zutaten</div>
-              {form.zutaten.map((z,i)=>(
-                <div key={z.id} style={{display:"flex",gap:6,marginBottom:5,alignItems:"center"}}>
-                  <input value={z.menge} onChange={e=>updateZutat(z.id,"menge",e.target.value)} placeholder="200g"
-                    style={{...INP,width:68,flexShrink:0}}/>
-                  <input value={z.name} onChange={e=>updateZutat(z.id,"name",e.target.value)} placeholder="Zutat..."
-                    style={{...INP,flex:1}}/>
+              <div style={{fontSize:9,color:"#aaa",marginBottom:6,textTransform:"uppercase",letterSpacing:1}}>Zutaten &amp; Fertiggerichte</div>
+              {form.zutaten.map((z,i)=>{
+                const comp=form.berechnungsart==="zutaten"?findComponent(z,ingredients,fertiggerichte):null;
+                const notFound=form.berechnungsart==="zutaten"&&z.name.trim()&&!comp;
+                return(
+                <div key={z.id} style={{display:"flex",gap:6,marginBottom:5,alignItems:"center",flexWrap:"wrap"}}>
+                  {form.berechnungsart==="zutaten"&&(
+                    <select value={z.typ||"zutat"} onChange={e=>updateZutat(z.id,"typ",e.target.value)}
+                      style={{...INP,width:46,flexShrink:0,padding:"5px 1px",fontSize:13}} title="Zutat oder Fertiggericht">
+                      <option value="zutat">🥕</option>
+                      <option value="fertiggericht">🍱</option>
+                    </select>
+                  )}
+                  <input value={z.menge} onChange={e=>updateZutat(z.id,"menge",e.target.value)} placeholder="200"
+                    style={{...INP,width:56,flexShrink:0}}/>
+                  {form.berechnungsart==="zutaten"?(
+                    <select value={z.einheit||"g"} onChange={e=>updateZutat(z.id,"einheit",e.target.value)}
+                      style={{...INP,width:60,flexShrink:0,padding:"5px 2px"}}>
+                      {Object.keys(R2_UNIT_GRAMS).map(u=><option key={u} value={u}>{u}</option>)}
+                    </select>
+                  ):null}
+                  <input value={z.name} onChange={e=>updateZutat(z.id,"name",e.target.value)} placeholder={z.typ==="fertiggericht"?"Fertiggericht...":"Zutat..."}
+                    style={{...INP,flex:1,minWidth:100,borderColor:notFound?"#c0392b88":undefined}}/>
                   {form.zutaten.length>1&&(
                     <button onClick={()=>removeZutat(z.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#c0392b",fontSize:14,padding:2,flexShrink:0}}>✕</button>
                   )}
                 </div>
-              ))}
+                );
+              })}
+              {form.berechnungsart==="zutaten"&&form.zutaten.some(z=>z.name.trim()&&!findComponent(z,ingredients,fertiggerichte))&&(
+                <div style={{fontSize:9,color:"#c0392b",marginTop:2,marginBottom:4}}>⚠ Rot markierte Einträge fehlen in der jeweiligen Datenbank (zählen mit 0 in die Berechnung). 🥕 = Zutaten-Datenbank, 🍱 = Fertiggerichte-Datenbank.</div>
+              )}
               <button onClick={addZutat} style={{display:"flex",alignItems:"center",gap:4,padding:"4px 10px",borderRadius:20,border:"1px dashed #aaa",background:"transparent",cursor:"pointer",fontSize:10,color:"#888",marginTop:2}}>
-                <PlusIcon/> Zutat hinzufügen
+                <PlusIcon/> Zeile hinzufügen
               </button>
             </div>
+            {/* Zubereitung */}
+            <div style={{marginBottom:12}}>
+              <div style={{fontSize:9,color:"#aaa",marginBottom:6,textTransform:"uppercase",letterSpacing:1}}>Zubereitung (Schritte)</div>
+              <textarea value={form.zubereitung} onChange={e=>setForm(f=>({...f,zubereitung:e.target.value}))}
+                placeholder="1. ...&#10;2. ...&#10;3. ..." rows={5}
+                style={{...INP,width:"100%",boxSizing:"border-box",fontSize:11,resize:"vertical",fontFamily:"Georgia,serif"}}/>
+            </div>
             {/* Makros */}
+            {form.berechnungsart==="zutaten"?(
+              (()=>{
+                const port=parseFloat(form.portionen)||1;
+                const tot=computeRecipeMacrosFromZutaten(form.zutaten,ingredients,fertiggerichte);
+                const pp={kcal:Math.round(tot.kcal/port),protein:Math.round(tot.protein/port*10)/10,carbs:Math.round(tot.carbs/port*10)/10,fett:Math.round(tot.fett/port*10)/10};
+                return(
+                <div style={{marginBottom:14}}>
+                  <div style={{fontSize:9,color:"#aaa",marginBottom:6,textTransform:"uppercase",letterSpacing:1}}>Berechnete Makros pro Portion</div>
+                  <div style={{display:"flex",gap:8,background:"#faf9f7",borderRadius:8,padding:"8px 10px",border:"1px solid #f0ede8",justifyContent:"space-around"}}>
+                    <span style={{fontSize:11,color:"#e74c3c",fontWeight:700}}>{pp.kcal} kcal</span>
+                    <span style={{fontSize:11,color:"#9b72cf",fontWeight:700}}>{pp.protein}g P</span>
+                    <span style={{fontSize:11,color:"#c8a200",fontWeight:700}}>{pp.carbs}g C</span>
+                    <span style={{fontSize:11,color:"#e67e22",fontWeight:700}}>{pp.fett}g F</span>
+                  </div>
+                </div>
+                );
+              })()
+            ):(
             <div style={{marginBottom:14}}>
               <div style={{display:"flex",alignItems:"center",marginBottom:6}}>
                 <div style={{fontSize:9,color:"#aaa",textTransform:"uppercase",letterSpacing:1,flex:1}}>Makros pro Portion</div>
@@ -3903,10 +4472,276 @@ function RecipesView({recipes,onSave,onAddRecipe,accent,apiKey,today,onMarkEaten
                 ))}
               </div>
             </div>
+            )}
             {saveMsg&&<div style={{fontSize:11,color:"#27ae60",marginBottom:8,fontWeight:700}}>{saveMsg}</div>}
             <button onClick={saveRecipe}
               style={{width:"100%",padding:"10px 0",borderRadius:30,border:"none",background:accent,color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"Georgia,serif"}}>
               {editId?"Änderungen speichern":"Rezept speichern"}
+            </button>
+          </div>
+        )}
+
+        {/* ZUTATEN-DATENBANK */}
+        {view==="zutaten"&&(
+          <div>
+            <div style={{fontSize:11,color:"#888",marginBottom:12,lineHeight:1.6}}>
+              Nährwerte jeweils pro 100g/100ml. Diese Datenbank wird für die automatische Berechnung von Rezepten verwendet, deren Zutaten hier hinterlegt sind.
+            </div>
+            {/* Formular */}
+            <div style={{background:"#faf9f7",borderRadius:10,padding:"10px 12px",marginBottom:14,border:"1px solid #f0ede8"}}>
+              <input value={ingForm.name} onChange={e=>setIngForm(f=>({...f,name:e.target.value}))} placeholder="Name (z.B. Haferflocken)"
+                style={{...INP,width:"100%",boxSizing:"border-box",marginBottom:6,fontWeight:700}}/>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:5,marginBottom:6}}>
+                {[["kcal","kcal","#e74c3c"],["protein","Protein g","#9b72cf"],["carbs","Carbs g","#c8a200"],["zucker","davon Zucker g","#e0c250"],["fett","Fett g","#e67e22"],["gesFett","davon ges. g","#ffa36c"],["ballaststoffe","Ballaststoffe g","#7fae4a"]].map(([k,ph,c])=>(
+                  <div key={k}>
+                    <div style={{fontSize:7,color:c,marginBottom:2,textAlign:"center"}}>{ph}</div>
+                    <input type="number" value={ingForm[k]} onChange={e=>setIngForm(f=>({...f,[k]:e.target.value}))} placeholder="0"
+                      style={{...INP,width:"100%",boxSizing:"border-box",borderColor:c+"55",textAlign:"center",padding:"5px 3px",fontSize:11}}/>
+                  </div>
+                ))}
+              </div>
+              <div style={{display:"flex",gap:6}}>
+                <button onClick={saveIngredient}
+                  style={{flex:1,padding:"7px 0",borderRadius:20,border:"none",background:accent,color:"#fff",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"Georgia,serif"}}>
+                  {ingEditId?"Änderungen speichern":"+ Zutat speichern"}
+                </button>
+                {ingEditId&&(
+                  <button onClick={resetIngForm} style={{padding:"7px 12px",borderRadius:20,border:"1px solid #ddd",background:"#fff",cursor:"pointer",fontSize:11,color:"#888"}}>Abbrechen</button>
+                )}
+              </div>
+            </div>
+            {/* Liste */}
+            {(ingredients||[]).length===0&&(
+              <div style={{textAlign:"center",padding:"20px",color:"#aaa",fontSize:12}}>Noch keine Zutaten in der Datenbank.</div>
+            )}
+            {(ingredients||[]).slice().sort((a,b)=>a.name.localeCompare(b.name,"de")).map(i=>(
+              <div key={i.id} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",marginBottom:5,borderRadius:8,background:"#fff",border:"1px solid #ece9e4"}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:11,fontWeight:700,color:"#111"}}>{i.name}</div>
+                  <div style={{fontSize:9,color:"#888",marginTop:2}}>{i.kcal} kcal · {i.protein}g P · {i.carbs}g C ({i.zucker}g Z) · {i.fett}g F ({i.gesFett}g ges.) · {i.ballaststoffe}g Ballast.</div>
+                </div>
+                <button onClick={()=>startEditIngredient(i)} style={{background:"none",border:"none",cursor:"pointer",color:"#aaa",fontSize:13,padding:2}}>✎</button>
+                <button onClick={()=>deleteIngredient(i.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#c0392b",fontSize:13,padding:2}}>✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* FERTIGGERICHTE */}
+        {view==="fertiggerichte"&&(()=>{
+          let fgList=(fertiggerichte||[]).filter(f=>!fgFilterText||f.name.toLowerCase().includes(fgFilterText.toLowerCase()));
+          fgList=[...fgList].sort((a,b)=>{
+            if(fgSortBy==="az") return a.name.localeCompare(b.name,"de");
+            if(fgSortBy==="za") return b.name.localeCompare(a.name,"de");
+            if(fgSortBy==="tage_asc"){ const da=daysSince(a.lastEaten),db=daysSince(b.lastEaten); if(da===null&&db===null) return 0; if(da===null) return 1; if(db===null) return -1; return da-db; }
+            if(fgSortBy==="tage_desc"){ const da=daysSince(a.lastEaten),db=daysSince(b.lastEaten); if(da===null&&db===null) return 0; if(da===null) return -1; if(db===null) return 1; return db-da; }
+            if(["gesundheit","kalorien","geschmack","schwierigkeit"].includes(fgSortBy)) return ((b.ratings||{})[fgSortBy]||0)-((a.ratings||{})[fgSortBy]||0);
+            if(fgSortBy==="kcal_desc") return (b.kcal||0)-(a.kcal||0);
+            if(fgSortBy==="protein_desc") return (b.protein||0)-(a.protein||0);
+            if(fgSortBy==="carbs_desc") return (b.carbs||0)-(a.carbs||0);
+            if(fgSortBy==="fett_desc") return (b.fett||0)-(a.fett||0);
+            return 0;
+          });
+          return(
+          <div>
+            <div style={{fontSize:11,color:"#888",marginBottom:12,lineHeight:1.6}}>
+              Fertiggerichte (z.B. gekaufte Fertigprodukte). Nährwerte gelten für die eingetragene Grammzahl, Standard 100g. Können in Rezepten als Zutat 🍱 verwendet werden.
+            </div>
+            {/* Formular */}
+            <div style={{background:"#faf9f7",borderRadius:10,padding:"10px 12px",marginBottom:14,border:"1px solid #f0ede8"}}>
+              <input value={fgForm.name} onChange={e=>setFgForm(f=>({...f,name:e.target.value}))} placeholder="Name (z.B. Tiefkühlpizza Margherita)"
+                style={{...INP,width:"100%",boxSizing:"border-box",marginBottom:6,fontWeight:700}}/>
+              <div style={{marginBottom:6}}>
+                <div style={{fontSize:7,color:"#888",marginBottom:2}}>Nährwerte gelten für ... Gramm</div>
+                <input type="number" value={fgForm.referenzMenge} onChange={e=>setFgForm(f=>({...f,referenzMenge:e.target.value}))} placeholder="100"
+                  style={{...INP,width:80}}/>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:5,marginBottom:6}}>
+                {[["kcal","kcal","#e74c3c"],["protein","Protein g","#9b72cf"],["carbs","Carbs g","#c8a200"],["zucker","davon Zucker g","#e0c250"],["fett","Fett g","#e67e22"],["gesFett","davon ges. g","#ffa36c"],["ballaststoffe","Ballaststoffe g","#7fae4a"]].map(([k,ph,c])=>(
+                  <div key={k}>
+                    <div style={{fontSize:7,color:c,marginBottom:2,textAlign:"center"}}>{ph}</div>
+                    <input type="number" value={fgForm[k]} onChange={e=>setFgForm(f=>({...f,[k]:e.target.value}))} placeholder="0"
+                      style={{...INP,width:"100%",boxSizing:"border-box",borderColor:c+"55",textAlign:"center",padding:"5px 3px",fontSize:11}}/>
+                  </div>
+                ))}
+              </div>
+              <div style={{display:"flex",gap:6}}>
+                <button onClick={saveFertiggericht}
+                  style={{flex:1,padding:"7px 0",borderRadius:20,border:"none",background:accent,color:"#fff",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"Georgia,serif"}}>
+                  {fgEditId?"Änderungen speichern":"+ Fertiggericht speichern"}
+                </button>
+                {fgEditId&&(
+                  <button onClick={resetFgForm} style={{padding:"7px 12px",borderRadius:20,border:"1px solid #ddd",background:"#fff",cursor:"pointer",fontSize:11,color:"#888"}}>Abbrechen</button>
+                )}
+              </div>
+            </div>
+            {/* Filter/Sort */}
+            <div style={{display:"flex",gap:6,marginBottom:10}}>
+              <input value={fgFilterText} onChange={e=>setFgFilterText(e.target.value)} placeholder="🔍 Suchen..."
+                style={{...INP,flex:1,fontSize:11}}/>
+              <select value={fgSortBy} onChange={e=>setFgSortBy(e.target.value)}
+                style={{fontSize:10,border:"1px solid #ddd",borderRadius:6,padding:"4px 6px",fontFamily:"Georgia,serif",outline:"none",background:"#fff",color:"#333"}}>
+                <option value="standard">Standard</option>
+                <option value="az">A → Z</option>
+                <option value="za">Z → A</option>
+                <option value="tage_desc">Längste Pause zuerst</option>
+                <option value="tage_asc">Kürzeste Pause zuerst</option>
+                <option value="gesundheit">🥗 Gesundheit ↓</option>
+                <option value="geschmack">😋 Geschmack ↓</option>
+                <option value="kalorien">⚡ Kalorien-Rating ↓</option>
+                <option value="schwierigkeit">👨‍🍳 Schwierigkeit ↓</option>
+                <option value="kcal_desc">🔥 Kalorien (kcal) ↓</option>
+                <option value="protein_desc">💪 Protein (g) ↓</option>
+                <option value="carbs_desc">🌾 Carbs (g) ↓</option>
+                <option value="fett_desc">🥑 Fett (g) ↓</option>
+              </select>
+            </div>
+            {/* Liste */}
+            {fgList.length===0&&(
+              <div style={{textAlign:"center",padding:"20px",color:"#aaa",fontSize:12}}>Keine Fertiggerichte gefunden.</div>
+            )}
+            {fgList.map(f=>{
+              const ds=daysSince(f.lastEaten);
+              const badgeColor=ds===null?"#bbb":ds===0?"#27ae60":ds<=3?"#2980b9":ds<=7?"#e67e22":"#c0392b";
+              const badgeBg=ds===null?"#f5f5f5":ds===0?"#eafaf1":ds<=3?"#eaf3fb":ds<=7?"#fef5e7":"#fdf0ef";
+              const rats=f.ratings||{};
+              return(
+              <div key={f.id} style={{background:"#fff",borderRadius:10,padding:"12px 14px",marginBottom:10,border:"1px solid #ece9e4",boxShadow:"0 1px 4px rgba(0,0,0,.04)"}}>
+                <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
+                  <div style={{flex:1}}>
+                    <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,flexWrap:"wrap"}}>
+                      <div style={{fontSize:13,fontWeight:700,color:"#111"}}>{f.name}</div>
+                      <span style={{fontSize:9,fontWeight:700,color:badgeColor,background:badgeBg,borderRadius:20,padding:"2px 8px",border:`1px solid ${badgeColor}33`,whiteSpace:"nowrap"}}>
+                        {ds===null?"noch nie gegessen":ds===0?"heute gegessen":`vor ${ds} Tag${ds===1?"":"en"}`}
+                      </span>
+                    </div>
+                    <div style={{fontSize:10,color:"#888",marginBottom:6}}>je {f.referenzMenge||100}g</div>
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8}}>
+                      {[[f.kcal+" kcal","kcal","#e74c3c"],[f.protein+"g","P","#9b72cf"],[f.carbs+"g","C","#c8a200"],[f.fett+"g","F","#e67e22"]].map(([v,l,c])=>(
+                        <span key={l} style={{fontSize:9,background:c+"15",color:c,borderRadius:8,padding:"2px 7px",fontWeight:700}}>{v} {l}</span>
+                      ))}
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"5px 10px",marginBottom:8,padding:"8px 10px",background:"#faf9f7",borderRadius:8,border:"1px solid #f0ede8"}}>
+                      {RATINGS.map(({key,icon,label})=>(
+                        <div key={key} style={{display:"flex",alignItems:"center",gap:4}}>
+                          <span style={{fontSize:11,flexShrink:0}}>{icon}</span>
+                          <span style={{fontSize:8,color:"#999",width:58,flexShrink:0,lineHeight:1}}>{label}</span>
+                          <StarRating stars={rats[key]||0} onChange={v=>updateFgRating(f.id,key,v)} size={10}/>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:5,marginTop:9,flexWrap:"wrap"}}>
+                      <button onClick={()=>onLogEaten&&onLogEaten("fertiggericht",f,today)}
+                        title="Heute als gegessen markieren und in Ernährung eintragen"
+                        style={{padding:"3px 10px",borderRadius:20,border:"1px solid #27ae60",background:"#eafaf1",color:"#27ae60",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",fontWeight:700}}>
+                        ✓ Heute
+                      </button>
+                      {fgEditEatenId===f.id?(
+                        <div style={{display:"flex",alignItems:"center",gap:4}}>
+                          <input type="date" value={fgEditEatenDate} onChange={e=>setFgEditEatenDate(e.target.value)} max={today}
+                            style={{fontSize:10,padding:"2px 5px",border:"1px solid #ddd",borderRadius:6,fontFamily:"Georgia,serif",outline:"none"}}/>
+                          <button onClick={()=>{ onLogEaten&&onLogEaten("fertiggericht",f,fgEditEatenDate); setFgEditEatenId(null); }}
+                            style={{padding:"2px 8px",borderRadius:20,border:"none",background:accent,color:"#fff",cursor:"pointer",fontSize:10}}>OK</button>
+                          <button onClick={()=>setFgEditEatenId(null)} style={{padding:"2px 6px",borderRadius:20,border:"1px solid #ddd",background:"#fff",cursor:"pointer",fontSize:10,color:"#888"}}>✕</button>
+                        </div>
+                      ):(
+                        <button onClick={()=>{ setFgEditEatenId(f.id); setFgEditEatenDate(f.lastEaten||today); }} title="Datum manuell setzen"
+                          style={{padding:"3px 8px",borderRadius:20,border:"1px solid #ddd",background:"#f9f7f3",color:"#888",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",display:"flex",alignItems:"center",gap:3}}>
+                          📅 {f.lastEaten?formatDate(f.lastEaten,{day:"2-digit",month:"2-digit",year:"2-digit"}):"Datum setzen"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:4,flexShrink:0}}>
+                    <button onClick={()=>startEditFertiggericht(f)} style={{background:"none",border:"none",cursor:"pointer",color:"#aaa",fontSize:13,padding:2}}>✎</button>
+                    <button onClick={()=>deleteFertiggericht(f.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#c0392b",fontSize:13,padding:2}}>✕</button>
+                  </div>
+                </div>
+              </div>
+              );
+            })}
+          </div>
+          );
+        })()}
+
+        {/* GETRÄNKE */}
+        {view==="getraenke"&&(
+          <div>
+            <div style={{fontSize:11,color:"#888",marginBottom:12,lineHeight:1.6}}>
+              Getränke-Datenbank, Nährwerte pro 100ml. "Wasser" ist im Ernährungs-Tab immer als kalorienfreie Standardauswahl verfügbar, auch ohne Eintrag hier.
+            </div>
+            <div style={{background:"#faf9f7",borderRadius:10,padding:"10px 12px",marginBottom:14,border:"1px solid #f0ede8"}}>
+              <input value={gtForm.name} onChange={e=>setGtForm(f=>({...f,name:e.target.value}))} placeholder="Name (z.B. Apfelschorle)"
+                style={{...INP,width:"100%",boxSizing:"border-box",marginBottom:6,fontWeight:700}}/>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:5,marginBottom:6}}>
+                {[["kcal","kcal","#e74c3c"],["protein","Protein g","#9b72cf"],["carbs","Carbs g","#c8a200"],["zucker","davon Zucker g","#e0c250"],["fett","Fett g","#e67e22"],["gesFett","davon ges. g","#ffa36c"],["ballaststoffe","Ballaststoffe g","#7fae4a"]].map(([k,ph,c])=>(
+                  <div key={k}>
+                    <div style={{fontSize:7,color:c,marginBottom:2,textAlign:"center"}}>{ph}</div>
+                    <input type="number" value={gtForm[k]} onChange={e=>setGtForm(f=>({...f,[k]:e.target.value}))} placeholder="0"
+                      style={{...INP,width:"100%",boxSizing:"border-box",borderColor:c+"55",textAlign:"center",padding:"5px 3px",fontSize:11}}/>
+                  </div>
+                ))}
+              </div>
+              <div style={{display:"flex",gap:6}}>
+                <button onClick={saveGetraenk}
+                  style={{flex:1,padding:"7px 0",borderRadius:20,border:"none",background:accent,color:"#fff",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"Georgia,serif"}}>
+                  {gtEditId?"Änderungen speichern":"+ Getränk speichern"}
+                </button>
+                {gtEditId&&(
+                  <button onClick={resetGtForm} style={{padding:"7px 12px",borderRadius:20,border:"1px solid #ddd",background:"#fff",cursor:"pointer",fontSize:11,color:"#888"}}>Abbrechen</button>
+                )}
+              </div>
+            </div>
+            {(getraenke||[]).length===0&&(
+              <div style={{textAlign:"center",padding:"20px",color:"#aaa",fontSize:12}}>Noch keine Getränke in der Datenbank (Wasser ist trotzdem im Ernährungs-Tab wählbar).</div>
+            )}
+            {(getraenke||[]).slice().sort((a,b)=>a.name.localeCompare(b.name,"de")).map(g=>(
+              <div key={g.id} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",marginBottom:5,borderRadius:8,background:"#fff",border:"1px solid #ece9e4"}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:11,fontWeight:700,color:"#111"}}>{g.name}</div>
+                  <div style={{fontSize:9,color:"#888",marginTop:2}}>{g.kcal} kcal · {g.protein}g P · {g.carbs}g C ({g.zucker}g Z) · {g.fett}g F ({g.gesFett}g ges.) je 100ml</div>
+                </div>
+                <button onClick={()=>startEditGetraenk(g)} style={{background:"none",border:"none",cursor:"pointer",color:"#aaa",fontSize:13,padding:2}}>✎</button>
+                <button onClick={()=>deleteGetraenk(g.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#c0392b",fontSize:13,padding:2}}>✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* CSV-IMPORT */}
+        {view==="import"&&(
+          <div>
+            <div style={{fontSize:11,color:"#888",marginBottom:14,lineHeight:1.6}}>
+              Massenimport per CSV. Jede Datei überschreibt Einträge mit gleichem Namen/Titel. Rezepte-CSV bringt seine Zutaten/Fertiggerichte gleich mit.
+            </div>
+            <div style={{marginBottom:14}}>
+              <div style={{fontSize:9,color:"#aaa",marginBottom:4,textTransform:"uppercase",letterSpacing:1}}>Zutaten-CSV</div>
+              <div style={{fontSize:9,color:"#999",marginBottom:6}}>Spalten: name, kcal, protein, carbs, zucker, fett, gesfett, ballaststoffe (jeweils pro 100g/ml)</div>
+              <input type="file" accept=".csv,text/csv" onChange={e=>setCsvIngFile(e.target.files?.[0]||null)}
+                style={{fontSize:11,fontFamily:"Georgia,serif"}}/>
+            </div>
+            <div style={{marginBottom:14}}>
+              <div style={{fontSize:9,color:"#aaa",marginBottom:4,textTransform:"uppercase",letterSpacing:1}}>Fertiggerichte-CSV</div>
+              <div style={{fontSize:9,color:"#999",marginBottom:6}}>Spalten: name, referenzmenge, kcal, protein, carbs, zucker, fett, gesfett, ballaststoffe (Werte gelten für "referenzmenge" Gramm, Standard 100)</div>
+              <input type="file" accept=".csv,text/csv" onChange={e=>setCsvFgFile(e.target.files?.[0]||null)}
+                style={{fontSize:11,fontFamily:"Georgia,serif"}}/>
+            </div>
+            <div style={{marginBottom:14}}>
+              <div style={{fontSize:9,color:"#aaa",marginBottom:4,textTransform:"uppercase",letterSpacing:1}}>Getränke-CSV</div>
+              <div style={{fontSize:9,color:"#999",marginBottom:6}}>Spalten: name, kcal, protein, carbs, zucker, fett, gesfett, ballaststoffe (jeweils pro 100ml)</div>
+              <input type="file" accept=".csv,text/csv" onChange={e=>setCsvGtFile(e.target.files?.[0]||null)}
+                style={{fontSize:11,fontFamily:"Georgia,serif"}}/>
+            </div>
+            <div style={{marginBottom:14}}>
+              <div style={{fontSize:9,color:"#aaa",marginBottom:4,textTransform:"uppercase",letterSpacing:1}}>Rezepte-CSV</div>
+              <div style={{fontSize:9,color:"#999",marginBottom:6}}>Spalten: titel, portionen, zubereitung, zutat_name, zutat_typ, menge, einheit (1 Zeile pro Zutat/Fertiggericht, titel wiederholt sich). zutat_typ: "zutat" (Standard) oder "fertiggericht"</div>
+              <input type="file" accept=".csv,text/csv" onChange={e=>setCsvRecFile(e.target.files?.[0]||null)}
+                style={{fontSize:11,fontFamily:"Georgia,serif"}}/>
+            </div>
+            {importMsg&&<div style={{fontSize:11,color:importMsg.startsWith("✓")?"#27ae60":"#c0392b",marginBottom:10,fontWeight:700}}>{importMsg}</div>}
+            <button onClick={runImport} disabled={importLoading}
+              style={{width:"100%",padding:"9px 0",borderRadius:30,border:"none",background:importLoading?"#ddd":accent,color:"#fff",cursor:importLoading?"default":"pointer",fontSize:12,fontWeight:700,fontFamily:"Georgia,serif"}}>
+              {importLoading?"Importiere...":"Importieren"}
             </button>
           </div>
         )}
@@ -4386,11 +5221,31 @@ function DashboardView(props) {
   var eaten       = (nutrDay.mahlzeiten||[]).reduce(function(s,m){ return s+(m.kcal||0); }, 0);
   var drank       = nutrDay.wasser || 0;
   var profile     = personProfiles[activePerson] || null;
-  var tdeeForDash  = (profile && profile.aktivitaetsModus==="multiplikator")
-    ? (computeKcalTarget(profile, profile.aktivitaetsFaktor)||2000)
-    : (computeBMRBase(profile)||2000);
-  var dashMacros  = computeMacroTargets(profile, tdeeForDash);
-  var kcalTarget  = dashMacros.kcal;
+  var dashWeight  = (profile && profile.gewicht) || 70;
+  var dashAktivModus = (profile && profile.aktivitaetsModus) || "aktivitaeten";
+  var dashAktivFaktor = (profile && profile.aktivitaetsFaktor) || 1.55;
+  var dashBmrBase = computeBMRBase(profile);
+  // Aktive Kalorien aus allen drei Quellen (identisch zum Ernährungs-Tab):
+  // 1) Routine alt (dayEntry.windows[].aktivitaeten), 2) manuelle Aktivitäten, 3) Routine 2.0
+  var dashAutoAkt = computeActiveFromEntries(dayEntry, dashWeight);
+  var dashTotalAutoKcal = dashAutoAkt.reduce(function(s,a){ return s+a.kcal; },0);
+  var dashManualAkt = nutrDay.aktivitaeten_manuell||[];
+  var dashTotalManualKcal = dashManualAkt.reduce(function(s,a){ return s+(a.kcal_berechnet||0); },0);
+  var dashRoutineAkt = r2Windows
+    .filter(function(w){ var wd=r2Day.windows[w.id]; return wd && wd.status==="erledigt"; })
+    .map(function(w){ var wd=r2Day.windows[w.id]||{}; return {kcal:wd.kcalBurned||0}; });
+  var dashTotalRoutineKcal = dashRoutineAkt.reduce(function(s,a){ return s+(a.kcal||0); },0);
+  var dashTotalActiveKcal = dashTotalAutoKcal + dashTotalManualKcal + dashTotalRoutineKcal;
+  var dashKcalTarget = dashAktivModus==="multiplikator"
+    ? (computeKcalTarget(profile, dashAktivFaktor) || 2000)
+    : (dashBmrBase ? dashBmrBase + dashTotalActiveKcal : 2000);
+  var tdeeForDash  = (dashAktivModus==="multiplikator")
+    ? (computeKcalTarget(profile, dashAktivFaktor)||2000)
+    : (dashBmrBase || 2000); // stabile Basis ohne tagesaktuelle Aktivitäten
+  var dashMacros  = computeMacroTargets(profile, tdeeForDash, dashTotalActiveKcal);
+  var kcalTarget  = dashAktivModus==="aktivitaeten"
+    ? Math.max(1200, dashMacros.kcal - tdeeForDash + dashKcalTarget)
+    : dashMacros.kcal;
   var waterTarget = dashMacros.water;
   var kcalPct     = Math.min(100, eaten>0 ? Math.round(eaten/kcalTarget*100) : 0);
   var waterPct    = Math.min(100, drank>0 ? Math.round(drank/waterTarget*100) : 0);
@@ -4491,8 +5346,8 @@ function DashboardView(props) {
           </div>
         </DashCard>
 
-        {/* Rezepte */}
-        <DashCard title="Rezepte" accentColor="#e67e22" onClick={function(){ onNavigate("rezepte"); }}>
+        {/* Essen & Getränke */}
+        <DashCard title="Essen & Getränke" accentColor="#e67e22" onClick={function(){ onNavigate("rezepte"); }}>
           {recipes.length===0
             ? <div style={{color:"#555",fontSize:11,marginTop:2}}>Noch keine Rezepte</div>
             : recipes.slice(0,3).map(function(r,i){
@@ -4868,22 +5723,63 @@ function ViewBgSvg({view, dark}){
     </svg>
   );
 
-  /* ── ERNÄHRUNG (dunkel – Pfirsich/Zitrus-Formen) ── */
+  /* ── ERNÄHRUNG (hell – bunte Wiese mit Sonne, Blumen & Schmetterlingen) ── */
   if(view==="ernaehrung") return(
     <svg style={st} viewBox={vb} preserveAspectRatio={ar}>
       <defs>
-        <radialGradient id="er_a" cx="50%" cy="50%" r="50%"><stop offset="0%" stopColor="#43aa8b" stopOpacity="0.15"/><stop offset="100%" stopColor="#43aa8b" stopOpacity="0"/></radialGradient>
-        <radialGradient id="er_b" cx="50%" cy="50%" r="50%"><stop offset="0%" stopColor="#f4845f" stopOpacity="0.13"/><stop offset="100%" stopColor="#f4845f" stopOpacity="0"/></radialGradient>
-        <radialGradient id="er_c" cx="50%" cy="50%" r="50%"><stop offset="0%" stopColor="#f9c74f" stopOpacity="0.10"/><stop offset="100%" stopColor="#f9c74f" stopOpacity="0"/></radialGradient>
+        <radialGradient id="er_sky" cx="50%" cy="0%" r="75%"><stop offset="0%" stopColor="#eaf6ff" stopOpacity="0.55"/><stop offset="100%" stopColor="#eaf6ff" stopOpacity="0"/></radialGradient>
+        <linearGradient id="er_hillA" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#8bc98a" stopOpacity="0.30"/><stop offset="100%" stopColor="#6fae6e" stopOpacity="0.22"/></linearGradient>
+        <linearGradient id="er_hillB" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#a9d98f" stopOpacity="0.26"/><stop offset="100%" stopColor="#8bc46e" stopOpacity="0.20"/></linearGradient>
+        <radialGradient id="er_sun" cx="50%" cy="50%" r="50%"><stop offset="0%" stopColor="#ffd76a" stopOpacity="0.55"/><stop offset="100%" stopColor="#ffd76a" stopOpacity="0"/></radialGradient>
       </defs>
-      <ellipse cx="80" cy="150" rx="200" ry="170" fill="url(#er_a)"/>
-      <ellipse cx="340" cy="680" rx="190" ry="200" fill="url(#er_b)"/>
-      <ellipse cx="370" cy="420" rx="130" ry="150" fill="url(#er_c)"/>
-      <circle cx="340" cy="600" r="90" fill="#f4845f" opacity="0.06"/>
-      <circle cx="340" cy="600" r="60" fill="#f9c74f" opacity="0.05"/>
-      <path d="M340,600 L340,516 M340,600 L420,642 M340,600 L268,652 M340,600 L278,534 M340,600 L396,534" fill="none" stroke="#f4845f" strokeWidth="1" opacity="0.11"/>
-      <circle cx="80" cy="350" r="68" fill="#43aa8b" opacity="0.06"/>
-      <path d="M80,80 Q110,58 132,80 Q154,102 132,124 Q110,146 80,124 Q50,102 80,80Z" fill="none" stroke="#43aa8b" strokeWidth="1.5" opacity="0.13"/>
+
+      {/* Himmelswäsche oben */}
+      <rect x="0" y="0" width="400" height="500" fill="url(#er_sky)"/>
+
+      {/* Sonne */}
+      <circle cx="330" cy="90" r="70" fill="url(#er_sun)"/>
+      <circle cx="330" cy="90" r="26" fill="#ffcf4d" opacity="0.35"/>
+
+      {/* Hügellandschaft (mehrschichtig) */}
+      <path d="M-20,560 Q80,500 180,540 Q280,580 420,520 L420,800 L-20,800 Z" fill="url(#er_hillA)"/>
+      <path d="M-20,620 Q100,580 220,610 Q320,635 420,590 L420,800 L-20,800 Z" fill="url(#er_hillB)"/>
+      <path d="M-20,690 Q120,660 240,685 Q330,705 420,670 L420,800 L-20,800 Z" fill="#5fa15c" opacity="0.20"/>
+
+      {/* Grashalme am unteren Rand */}
+      {[20,55,90,130,170,210,250,290,330,370].map((gx,i)=>(
+        <path key={i} d={`M${gx},796 Q${gx-4},760 ${gx+2},730`} fill="none" stroke="#4f9a52" strokeWidth="2" opacity="0.28" strokeLinecap="round"/>
+      ))}
+
+      {/* Blumen verstreut über die Wiese */}
+      {[
+        {x:60,y:210,c:"#f4845f"},{x:340,y:250,c:"#e85d75"},{x:110,y:330,c:"#f9c74f"},
+        {x:280,y:360,c:"#c977d6"},{x:40,y:420,c:"#f4845f"},{x:200,y:200,c:"#f9c74f"},
+        {x:360,y:440,c:"#e85d75"},{x:150,y:470,c:"#c977d6"},{x:260,y:150,c:"#f4845f"},
+      ].map((f,i)=>(
+        <g key={i} opacity="0.30">
+          {[0,72,144,216,288].map(a=>(
+            <ellipse key={a} cx={f.x+Math.cos(a*Math.PI/180)*6} cy={f.y+Math.sin(a*Math.PI/180)*6} rx="4.5" ry="3" fill={f.c}
+              transform={`rotate(${a} ${f.x} ${f.y})`}/>
+          ))}
+          <circle cx={f.x} cy={f.y} r="3" fill="#fff3c4"/>
+        </g>
+      ))}
+
+      {/* Schmetterlinge */}
+      <g opacity="0.28">
+        <ellipse cx="94" cy="140" rx="10" ry="7" fill="#f9c74f" transform="rotate(-18 94 140)"/>
+        <ellipse cx="108" cy="140" rx="10" ry="7" fill="#f4845f" transform="rotate(18 108 140)"/>
+        <line x1="94" y1="140" x2="108" y2="140" stroke="#7a5230" strokeWidth="1"/>
+      </g>
+      <g opacity="0.22">
+        <ellipse cx="300" cy="500" rx="8" ry="6" fill="#c977d6" transform="rotate(-16 300 500)"/>
+        <ellipse cx="312" cy="500" rx="8" ry="6" fill="#8bc98a" transform="rotate(16 312 500)"/>
+        <line x1="300" y1="500" x2="312" y2="500" stroke="#7a5230" strokeWidth="1"/>
+      </g>
+
+      {/* Zarte Blätterranken am Rand */}
+      <path d="M-10,300 Q30,280 20,240 Q10,200 40,180" fill="none" stroke="#6fae6e" strokeWidth="2" opacity="0.18"/>
+      <path d="M410,600 Q370,580 380,540 Q390,500 360,480" fill="none" stroke="#6fae6e" strokeWidth="2" opacity="0.18"/>
     </svg>
   );
 
@@ -5641,10 +6537,14 @@ function App(){
   const [todos,setTodos]               = useState([]);
   const [favorites,setFavorites]       = useState([]); // Permanente Preisradar-Favoriten // { "2025-06-09": [...events] }
   const [nutritionData,setNutritionData] = useState({});
+  const [nutritionFavorites,setNutritionFavorites] = useState({}); // { Person: [{id,name,kcal,protein,carbs,fett}] } max 5/Person
   const [personProfiles,setPersonProfiles] = useState({});
   const [personColors,setPersonColors] = useState({});
   const [wishlist,setWishlist] = useState([]);
   const [recipes,setRecipes] = useState([]);
+  const [ingredients,setIngredients] = useState([]);
+  const [fertiggerichte,setFertiggerichte] = useState([]);
+  const [getraenke,setGetraenke] = useState([]);
   const [apiKey,setApiKey]   = useState("");
   const [routineCategories,setRoutineCategories] = useState(DEFAULT_ROUTINE_CATEGORIES);
   const [routineActivities,setRoutineActivities] = useState([]);
@@ -5889,6 +6789,8 @@ function App(){
     if(savedFav?.value){try{setFavorites(JSON.parse(savedFav.value));}catch{}}
     const savedNutr=await sGet(SK.nutrition);
     if(savedNutr?.value){try{setNutritionData(JSON.parse(savedNutr.value));}catch{}}
+    const savedNutrFav=await sGet(SK.nutritionFavorites);
+    if(savedNutrFav?.value){try{setNutritionFavorites(JSON.parse(savedNutrFav.value));}catch{}}
     const savedProfiles=await sGet(SK.personProfiles);
     if(savedProfiles?.value){try{setPersonProfiles(JSON.parse(savedProfiles.value));}catch{}}
     const savedColors=await sGet(SK.personColors);
@@ -5897,6 +6799,12 @@ function App(){
     if(savedWishlist?.value){try{setWishlist(JSON.parse(savedWishlist.value));}catch{}}
     const savedRecipes=await sGet(SK.recipes);
     if(savedRecipes?.value){try{setRecipes(JSON.parse(savedRecipes.value));}catch{}}
+    const savedIngredients=await sGet(SK.ingredients);
+    if(savedIngredients?.value){try{setIngredients(JSON.parse(savedIngredients.value));}catch{}}
+    const savedFertiggerichte=await sGet(SK.fertiggerichte);
+    if(savedFertiggerichte?.value){try{setFertiggerichte(JSON.parse(savedFertiggerichte.value));}catch{}}
+    const savedGetraenke=await sGet(SK.getraenke);
+    if(savedGetraenke?.value){try{setGetraenke(JSON.parse(savedGetraenke.value));}catch{}}
     const savedApiKey=await sGet(SK.apiKey);
     if(savedApiKey?.value){setApiKey(savedApiKey.value);}
     const savedRCats=await sGet(SK.routineCategories);
@@ -6125,6 +7033,21 @@ function App(){
     await sSet(SK.recipes,JSON.stringify(newRecipes));
     await saveTs();
   }
+  async function handleSaveIngredients(newIngredients){
+    setIngredients(newIngredients);
+    await sSet(SK.ingredients,JSON.stringify(newIngredients));
+    await saveTs();
+  }
+  async function handleSaveFertiggerichte(newFertiggerichte){
+    setFertiggerichte(newFertiggerichte);
+    await sSet(SK.fertiggerichte,JSON.stringify(newFertiggerichte));
+    await saveTs();
+  }
+  async function handleSaveGetraenke(newGetraenke){
+    setGetraenke(newGetraenke);
+    await sSet(SK.getraenke,JSON.stringify(newGetraenke));
+    await saveTs();
+  }
   async function handleAddRecipe(recipe){
     await handleSaveRecipes([...(recipes||[]),recipe]);
   }
@@ -6133,6 +7056,26 @@ function App(){
   async function handleMarkRecipeEaten(recipeId, dateStr){
     const updated=(recipes||[]).map(r=>r.id===recipeId?{...r,lastEaten:dateStr||todayStr()}:r);
     await handleSaveRecipes(updated);
+  }
+
+  // "Heute gegessen" im Essen & Getränke-Tab: setzt Zähler UND trägt die Nährwerte automatisch
+  // für die aktuell aktive Person im Ernährungs-Tab ein (an dem gewählten Datum).
+  async function handleLogEaten(kind, item, dateStr){
+    const dstr = dateStr || todayStr();
+    let macros, name;
+    if(kind==="rezept"){
+      macros = getRecipeMacrosProPortion(item, ingredients, fertiggerichte);
+      name = item.title;
+      await handleSaveRecipes((recipes||[]).map(r=>r.id===item.id?{...r,lastEaten:dstr}:r));
+    } else {
+      macros = {kcal:item.kcal||0, protein:item.protein||0, carbs:item.carbs||0, fett:item.fett||0};
+      name = item.name;
+      await handleSaveFertiggerichte((fertiggerichte||[]).map(f=>f.id===item.id?{...f,lastEaten:dstr}:f));
+    }
+    const key = `${activePerson}|${dstr}`;
+    const dayData = nutritionData[key] || { wasser:0, mahlzeiten:[] };
+    const meal = { id:uid(), zeit:"", name, kcal:macros.kcal||0, protein:macros.protein||0, carbs:macros.carbs||0, fett:macros.fett||0, addedAt:new Date().toISOString() };
+    await handleNutritionSave(key, {...dayData, mahlzeiten:[...(dayData.mahlzeiten||[]), meal]});
   }
 
   async function handleSavePersonProfiles(profiles){
@@ -6157,6 +7100,11 @@ function App(){
     const newData = {...nutritionData, [key]: dayData};
     setNutritionData(newData);
     await sSet(SK.nutrition, JSON.stringify(newData));
+    await saveTs();
+  }
+  async function handleSaveNutritionFavorites(newFavMap){
+    setNutritionFavorites(newFavMap);
+    await sSet(SK.nutritionFavorites, JSON.stringify(newFavMap));
     await saveTs();
   }
 
@@ -6494,13 +7442,17 @@ function App(){
           </div>
         );
 
-        /* ── REZEPTE ── */
+        /* ── ESSEN & GETRÄNKE ── */
         if(viewMode==="rezepte") return(
-          <div style={HDR}>
+          <div style={{...HDR,flexWrap:"wrap",rowGap:6}}>
             <button onClick={()=>setViewMode("dashboard")} style={BTN_BACK}>&#8592; Home</button>
             {kiBtn}
-            <span style={{fontSize:13,fontWeight:700,color:"#111",flex:1,textAlign:"center"}}>Rezepte</span>
+            <span style={{fontSize:13,fontWeight:700,color:"#111",flex:1,textAlign:"center"}}>Essen & Getränke</span>
             <button onClick={()=>window.__recipesToggleFilter&&window.__recipesToggleFilter()} style={{padding:"3px 9px",borderRadius:20,border:"1px solid #e0ddd8",background:"transparent",color:"#555",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",flexShrink:0}}>⊞ Filter</button>
+            <button onClick={()=>window.__recipesSetView&&window.__recipesSetView("zutaten")} style={{padding:"3px 9px",borderRadius:20,border:"1px solid #e0ddd8",background:"transparent",color:"#555",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",flexShrink:0}}>🥕 Zutaten</button>
+            <button onClick={()=>window.__recipesSetView&&window.__recipesSetView("fertiggerichte")} style={{padding:"3px 9px",borderRadius:20,border:"1px solid #e0ddd8",background:"transparent",color:"#555",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",flexShrink:0}}>🍱 Fertiggerichte</button>
+            <button onClick={()=>window.__recipesSetView&&window.__recipesSetView("getraenke")} style={{padding:"3px 9px",borderRadius:20,border:"1px solid #e0ddd8",background:"transparent",color:"#555",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",flexShrink:0}}>🥤 Getränke</button>
+            <button onClick={()=>window.__recipesSetView&&window.__recipesSetView("import")} style={{padding:"3px 9px",borderRadius:20,border:"1px solid #e0ddd8",background:"transparent",color:"#555",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",flexShrink:0}}>📥 Import</button>
             <button onClick={()=>window.__recipesSetView&&window.__recipesSetView("url")} style={{padding:"3px 9px",borderRadius:20,border:"1px solid #e0ddd8",background:"transparent",color:"#555",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",flexShrink:0}}>🔗 URL</button>
             <button onClick={()=>window.__recipesSetView&&window.__recipesSetView("neu")} style={{padding:"3px 10px",borderRadius:20,border:"none",background:accent,color:"#fff",cursor:"pointer",fontSize:10,fontFamily:"Georgia,serif",fontWeight:700,flexShrink:0}}>+ Neu</button>
           </div>
@@ -6624,6 +7576,11 @@ function App(){
           onMarkRecipeEaten={handleMarkRecipeEaten}
           routineWindows2={routineWindows2}
           routineEntries={routineEntries}
+          nutritionFavorites={nutritionFavorites}
+          onSaveNutritionFavorites={handleSaveNutritionFavorites}
+          getraenke={getraenke}
+          ingredients={ingredients}
+          fertiggerichte={fertiggerichte}
         />
       )}
       {viewMode==="rezepte"&&(
@@ -6631,6 +7588,13 @@ function App(){
           recipes={recipes}
           onSave={handleSaveRecipes}
           onAddRecipe={handleAddRecipe}
+          ingredients={ingredients}
+          onSaveIngredients={handleSaveIngredients}
+          fertiggerichte={fertiggerichte}
+          onSaveFertiggerichte={handleSaveFertiggerichte}
+          getraenke={getraenke}
+          onSaveGetraenke={handleSaveGetraenke}
+          onLogEaten={handleLogEaten}
           accent={accent}
           apiKey={apiKey}
           today={today}
