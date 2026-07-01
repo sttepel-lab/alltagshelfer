@@ -3017,7 +3017,7 @@ function NutritionTube({ value, total, type, label, unit }) {
   );
 }
 
-function NutritionView({ nutritionData, activePerson, activeDate, accent, persons, onSave, onDateChange, entries, personProfiles, recipes, externalTab, onMarkRecipeEaten }) {
+function NutritionView({ nutritionData, activePerson, activeDate, accent, persons, onSave, onDateChange, entries, personProfiles, recipes, externalTab, onMarkRecipeEaten, routineWindows2, routineEntries }) {
   const [tabInternal, setTabInternal] = useState("heute");
   const tab = externalTab||tabInternal;
   const setTab = setTabInternal;
@@ -3048,7 +3048,14 @@ function NutritionView({ nutritionData, activePerson, activeDate, accent, person
   const totalAutoKcal = autoAkt.reduce((s,a)=>s+a.kcal,0);
   const manualAkt = dayData.aktivitaeten_manuell||[];
   const totalManualKcal = manualAkt.reduce((s,a)=>s+(a.kcal_berechnet||0),0);
-  const totalActiveKcal = totalAutoKcal + totalManualKcal;
+  // Routine 2.0: abgehakte Zeitfenster liefern automatisch ihre hinterlegten Aktiv-Kalorien (0, falls keine kcalPerHour hinterlegt)
+  const r2Windows = (routineWindows2||{})[activePerson] || [];
+  const r2DayData = (routineEntries||{})[`${activePerson}|${activeDate}`] || {windows:{}};
+  const routineAkt = r2Windows
+    .filter(w=>{ const wd=r2DayData.windows[w.id]; return wd && wd.status==="erledigt"; })
+    .map(w=>{ const wd=r2DayData.windows[w.id]||{}; return {id:w.id, name:w.label, start:wd.istStart||w.sollStart, kcal:wd.kcalBurned||0}; });
+  const totalRoutineKcal = routineAkt.reduce((s,a)=>s+(a.kcal||0),0);
+  const totalActiveKcal = totalAutoKcal + totalManualKcal + totalRoutineKcal;
   const kcalTarget = aktivModus==="multiplikator"
     ? (computeKcalTarget(profile, aktivFaktor) || T.kcal)
     : (bmrBase ? bmrBase + totalActiveKcal : T.kcal);
@@ -3264,6 +3271,22 @@ function NutritionView({ nutritionData, activePerson, activeDate, accent, person
             <div style={{display:"flex",alignItems:"center",marginBottom:8}}>
               <span style={{fontSize:9,color:"#6fcf97",textTransform:"uppercase",letterSpacing:1,fontWeight:700,flex:1}}>🏃 Aktive Kalorien</span>
               {totalActiveKcal>0&&<span style={{fontSize:11,color:"#6fcf97",fontWeight:700}}>{totalActiveKcal} kcal</span>}
+            </div>
+            <div style={{marginBottom:8}}>
+              <div style={{fontSize:8,color:"#2a2a2a",textTransform:"uppercase",letterSpacing:1,marginBottom:4,display:"flex",alignItems:"center",gap:4}}>
+                <span>🔁 Aus Routine</span>
+                {routineAkt.length>0&&<span style={{color:"#3a5a3a",fontWeight:700}}>{totalRoutineKcal} kcal</span>}
+              </div>
+              {routineAkt.length===0
+                ? <div style={{fontSize:9,color:"#1e1e1e",fontStyle:"italic",padding:"2px 0"}}>Noch keine Zeitfenster abgehakt</div>
+                : routineAkt.map(a=>(
+                  <div key={a.id} style={{display:"flex",alignItems:"center",gap:4,padding:"3px 0",borderBottom:"1px solid #161616"}}>
+                    <span style={{fontSize:9,color:"#3a3a3a",minWidth:32,flexShrink:0}}>{a.start}</span>
+                    <span style={{fontSize:10,color:"#666",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.name}</span>
+                    <span style={{fontSize:9,color:"#6fcf97",fontWeight:700,flexShrink:0}}>{a.kcal}</span>
+                  </div>
+                ))
+              }
             </div>
             <div style={{marginBottom:8}}>
               <div style={{fontSize:8,color:"#2a2a2a",textTransform:"uppercase",letterSpacing:1,marginBottom:4,display:"flex",alignItems:"center",gap:4}}>
@@ -4953,7 +4976,20 @@ function RoutineNeuView(props){
   return (
     <div style={{flex:1,overflowY:"auto",display:"flex",flexDirection:"column"}}>
       <div style={{display:"flex",gap:4,padding:"10px 12px 4px",flexShrink:0}}>
-        {[["heute","Heute"],["windows","Zeitfenster"],["akts","Aktivitäten"],["kats","Kategorien"]].map(function(t){
+        {(function(){
+          var isUebersicht = tab==="heute"||tab==="woche"||tab==="monat";
+          return (
+            <select value={isUebersicht?tab:"heute"} onChange={function(e){setTab(e.target.value);}}
+              style={{flex:1,padding:"7px 4px",borderRadius:10,border:"1px solid #e0ddd8",cursor:"pointer",
+                background:isUebersicht?accent:"#f5f3ef",color:isUebersicht?"#fff":"#555",fontSize:11,fontWeight:600,
+                textAlign:"center",textAlignLast:"center",WebkitAppearance:"none",MozAppearance:"none",appearance:"none"}}>
+              <option value="heute">Heute</option>
+              <option value="woche">Woche</option>
+              <option value="monat">Monat</option>
+            </select>
+          );
+        })()}
+        {[["windows","Zeitfenster"],["akts","Aktivitäten"],["kats","Kategorien"]].map(function(t){
           return (
             <button key={t[0]} onClick={function(){setTab(t[0]);}}
               style={{flex:1,padding:"7px 4px",borderRadius:10,border:"1px solid #e0ddd8",cursor:"pointer",
@@ -4969,6 +5005,13 @@ function RoutineNeuView(props){
           routineActivities={routineActivities} routineCategories={routineCategories}
           getAktForWindow={getAktForWindow} durationH={durationH}
           onSaveEntry={onSaveEntry} accent={accent}/>
+      )}
+      {tab==="woche" && (
+        <R2WocheTab person={activePerson} today={todayStr()} windows={windows} routineEntries={routineEntries}
+          routineActivities={routineActivities} durationH={durationH} accent={accent}/>
+      )}
+      {tab==="monat" && (
+        <R2MonatTab person={activePerson} today={todayStr()} windows={windows} routineEntries={routineEntries} accent={accent}/>
       )}
       {tab==="windows" && (
         <R2WindowsTab persons={persons} activePerson={activePerson} routineWindows2={routineWindows2}
@@ -5213,6 +5256,162 @@ function R2HeuteTab(props){
           </div>
         );
       })()}
+    </div>
+  );
+}
+
+// --- Woche-Tab: rollierende 7-Tage-Rueckschau (heute immer rechts, nur Ist) --
+function R2WocheTab(props){
+  var windows=props.windows, entries=props.routineEntries||{}, person=props.person, today=props.today;
+  var routineActivities=props.routineActivities||[], durationH=props.durationH, accent=props.accent;
+
+  var days = Array.from({length:7},function(_,i){ return addDays(today,-6+i); });
+  var R2W_PX_PER_HOUR = 28;
+  var totalH = (DAY_END-DAY_START)*R2W_PX_PER_HOUR;
+  function y2(h){ return (h-DAY_START)*R2W_PX_PER_HOUR; }
+  var markers=[6,9,12,15,18,21];
+
+  return (
+    <div style={{padding:"6px 12px 24px"}}>
+      <div style={{display:"flex"}}>
+        <div style={{width:26,flexShrink:0,position:"relative",height:totalH}}>
+          {markers.map(function(h){
+            return <div key={h} style={{position:"absolute",top:y2(h)-5,left:0,fontSize:8,color:"#bbb"}}>{h}</div>;
+          })}
+        </div>
+        {days.map(function(d){
+          var isToday = d===today;
+          var dayData = entries[r2EntryKey(person,d)] || {windows:{}};
+          var anyEntry = false;
+          return (
+            <div key={d} style={{flex:1,minWidth:0,display:"flex",flexDirection:"column"}}>
+              <div style={{textAlign:"center",padding:"2px 0 4px",fontSize:8,fontWeight:isToday?800:600,
+                color:isToday?accent:"#999",borderBottom:"1px solid #ece9e4",lineHeight:1.3}}>
+                {new Date(d+"T12:00:00").toLocaleDateString("de-DE",{weekday:"short"})}<br/>
+                {formatDate(d,{day:"2-digit",month:"2-digit"})}
+              </div>
+              <div style={{flex:1,position:"relative",borderLeft:"1px solid #ece9e4",height:totalH,
+                background:isToday?"#faf6f0":"transparent"}}>
+                {markers.map(function(h){
+                  return <div key={h} style={{position:"absolute",top:y2(h),left:0,right:0,borderTop:"1px dotted #f0eee9"}}/>;
+                })}
+                {windows.map(function(w){
+                  var wd = dayData.windows[w.id];
+                  if(!wd || !wd.status || wd.status==="offen") return null; // nur tatsaechliche Ereignisse (Ist)
+                  anyEntry = true;
+                  var status = wd.status;
+                  var col = R2_STATUS_COLORS[status] || R2_STATUS_COLORS.offen;
+                  var s = status==="erledigt" ? (parseTime(wd.istStart)||parseTime(w.sollStart)) : parseTime(w.sollStart);
+                  if(s==null) return null;
+                  var h = status==="erledigt" ? Math.max(durationH(w)*R2W_PX_PER_HOUR*0.6,9) : 9;
+                  var akt = routineActivities.find(function(a){return a.id===wd.chosenActivityId;});
+                  var label = status==="erledigt" ? (akt?akt.title:w.label) : (status==="termin"?"📅":"✕");
+                  return (
+                    <div key={w.id} title={w.label+" · "+status}
+                      style={{position:"absolute",top:y2(s),left:1,right:1,minHeight:h,
+                        background:col.bg,border:"1px solid "+col.border,borderRadius:4,
+                        fontSize:7,color:col.text,overflow:"hidden",padding:"1px 2px",lineHeight:1.15,
+                        whiteSpace:"nowrap",textOverflow:"ellipsis"}}>
+                      {label}
+                    </div>
+                  );
+                })}
+                {!anyEntry && (
+                  <div style={{position:"absolute",top:y2(11),left:1,right:1,textAlign:"center",fontSize:7,color:"#ddd",fontStyle:"italic"}}>–</div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{display:"flex",gap:10,marginTop:10,fontSize:8,color:"#999",flexWrap:"wrap"}}>
+        <span><span style={{display:"inline-block",width:8,height:8,borderRadius:2,background:R2_STATUS_COLORS.erledigt.bg,border:"1px solid "+R2_STATUS_COLORS.erledigt.border,marginRight:3}}/>erledigt</span>
+        <span><span style={{display:"inline-block",width:8,height:8,borderRadius:2,background:R2_STATUS_COLORS.termin.bg,border:"1px solid "+R2_STATUS_COLORS.termin.border,marginRight:3}}/>Termin</span>
+        <span><span style={{display:"inline-block",width:8,height:8,borderRadius:2,background:R2_STATUS_COLORS.keinelust.bg,border:"1px solid "+R2_STATUS_COLORS.keinelust.border,marginRight:3}}/>keine Lust</span>
+      </div>
+      <div style={{fontSize:9,color:"#bbb",marginTop:6}}>Nur Rückschau · Bearbeiten im Heute-Tab</div>
+    </div>
+  );
+}
+
+// --- Monat-Tab: verdichtete Kalender-Heatmap (1 Farbe = Gesamt-Erfuellungsgrad) --
+function R2MonatTab(props){
+  var windows=props.windows||[], entries=props.routineEntries||{}, person=props.person, today=props.today, accent=props.accent;
+  var [monthAnchor,setMonthAnchor] = React.useState(today.slice(0,7)+"-15");
+
+  var monthStart = new Date(monthAnchor.slice(0,7)+"-01T12:00:00");
+  var daysInMonth = new Date(monthStart.getFullYear(), monthStart.getMonth()+1, 0).getDate();
+  var firstDow = monthStart.getDay(); // 0=So
+  var leadBlanks = (firstDow+6)%7; // Montag-Start
+  var monthDays = Array.from({length:daysInMonth},function(_,i){
+    var d=new Date(monthStart); d.setDate(i+1); return d.toISOString().slice(0,10);
+  });
+
+  function dayScore(d){
+    if(d>today) return null; // Zukunft: keine Bewertung
+    if(windows.length===0) return null;
+    var dayData = entries[r2EntryKey(person,d)];
+    if(!dayData) return {ratio:0,hasAny:false};
+    var erledigt=0, fail=0, neutral=0;
+    windows.forEach(function(w){
+      var wd = dayData.windows[w.id];
+      var status = wd&&wd.status ? wd.status : "offen";
+      if(status==="erledigt") erledigt++;
+      else if(status==="termin") neutral++;
+      else fail++; // keinelust oder unbearbeitet (offen an vergangenem Tag)
+    });
+    var denom = erledigt+fail;
+    var ratio = denom>0 ? erledigt/denom : (neutral>0?1:0);
+    return {ratio:ratio, hasAny:(erledigt+fail+neutral)>0};
+  }
+  function colorFor(score){
+    if(!score || !score.hasAny) return {bg:"#f5f3ef",border:"#e8e5df"};
+    if(score.ratio>=0.8) return {bg:"#9fcf9f",border:"#7fba7f"};
+    if(score.ratio>=0.5) return {bg:"#f0d68a",border:"#d9bd66"};
+    return {bg:"#e8a3a3",border:"#d67f7f"};
+  }
+
+  var weekdayLabels=["Mo","Di","Mi","Do","Fr","Sa","So"];
+
+  return (
+    <div style={{padding:"6px 12px 24px"}}>
+      <div style={{display:"flex",alignItems:"center",gap:4,marginBottom:10}}>
+        <button onClick={function(){setMonthAnchor(addDays(monthAnchor,-32).slice(0,7)+"-15");}}
+          style={{background:"none",border:"none",cursor:"pointer",color:"#555",padding:4}}><ChevL/></button>
+        <span style={{flex:1,textAlign:"center",fontSize:12,fontWeight:700,color:"#333"}}>
+          {formatDate(monthAnchor,{month:"long",year:"numeric"})}
+        </span>
+        <button onClick={function(){setMonthAnchor(addDays(monthAnchor,32).slice(0,7)+"-15");}}
+          style={{background:"none",border:"none",cursor:"pointer",color:"#555",padding:4}}><ChevR/></button>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4,marginBottom:4}}>
+        {weekdayLabels.map(function(l){ return <div key={l} style={{textAlign:"center",fontSize:8,color:"#aaa",fontWeight:700}}>{l}</div>; })}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4}}>
+        {Array.from({length:leadBlanks}).map(function(_,i){ return <div key={"b"+i}/>; })}
+        {monthDays.map(function(d){
+          var score = dayScore(d);
+          var col = colorFor(score);
+          var isToday = d===today;
+          return (
+            <div key={d} title={d+(score&&score.hasAny?" · "+Math.round(score.ratio*100)+"% erfüllt":" · keine Daten")}
+              style={{aspectRatio:"1",borderRadius:8,background:col.bg,
+                border:"1px solid "+(isToday?accent:col.border),
+                display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:"#555",fontWeight:isToday?800:500}}>
+              {parseInt(d.slice(8,10),10)}
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{display:"flex",gap:10,marginTop:14,fontSize:8,color:"#999",flexWrap:"wrap"}}>
+        <span><span style={{display:"inline-block",width:8,height:8,borderRadius:2,background:"#9fcf9f",border:"1px solid #7fba7f",marginRight:3}}/>gut erfüllt</span>
+        <span><span style={{display:"inline-block",width:8,height:8,borderRadius:2,background:"#f0d68a",border:"1px solid #d9bd66",marginRight:3}}/>teilweise</span>
+        <span><span style={{display:"inline-block",width:8,height:8,borderRadius:2,background:"#e8a3a3",border:"1px solid #d67f7f",marginRight:3}}/>wenig erfüllt</span>
+        <span><span style={{display:"inline-block",width:8,height:8,borderRadius:2,background:"#f5f3ef",border:"1px solid #e8e5df",marginRight:3}}/>keine Daten</span>
+      </div>
+      <div style={{fontSize:9,color:"#bbb",marginTop:6}}>Nur Rückschau · Bearbeiten im Heute-Tab</div>
     </div>
   );
 }
@@ -6423,6 +6622,8 @@ function App(){
           recipes={recipes}
           externalTab={nutritionTab}
           onMarkRecipeEaten={handleMarkRecipeEaten}
+          routineWindows2={routineWindows2}
+          routineEntries={routineEntries}
         />
       )}
       {viewMode==="rezepte"&&(
